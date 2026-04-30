@@ -134,6 +134,20 @@ Every significant code change must be covered by tests before it is committed.
 
 ---
 
+## Dependency Management
+
+- All dependencies are pinned with exact versions in `requirements.txt` and `requirements-dev.txt`.
+- Use `pip-compile` (from `pip-tools`) to generate pinned files from `requirements.in` / `requirements-dev.in`.
+- After installing or upgrading any package, immediately regenerate and commit the updated `requirements.txt`:
+  ```bash
+  pip-compile requirements.in
+  pip-compile requirements-dev.in
+  ```
+- Never commit unpinned entries (e.g. `pandas` without `==x.y.z`).
+- `requirements.txt` and `requirements-dev.txt` must always reflect the exact state of the active `.venv`.
+
+---
+
 ## Key Dependencies
 
 | Purpose | Library |
