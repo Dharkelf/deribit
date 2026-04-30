@@ -20,30 +20,114 @@ Two-module Python pipeline:
 
 ## Architecture
 
+### Data Flow
+
 ```
-Deribit API ──┐
-              ├──► src/collector/ ──► data/raw/*.parquet
-yfinance VIX ─┘
-                                          │
-                                          ▼
-                              src/hmm/features.py  ◄── BTC, ETH, VIX series
-                                          │
-                                          ▼
-                              src/hmm/optimizer.py  (Optuna + TimeSeriesSplit)
-                                          │
-                                          ▼
-                              src/hmm/model.py  (GaussianHMM)
-                                          │
-                                          ▼
-                              src/hmm/predict.py  ──► regime labels + forecasts
+┌──────────────────┐     ┌──────────────────┐
+│   Deribit REST   │     │  Yahoo Finance   │
+│  (BTC/ETH/SOL)   │     │      (VIX)       │
+└────────┬─────────┘     └────────┬─────────┘
+         │                        │
+         ▼                        ▼
+┌─────────────────┐    ┌──────────────────┐
+│  DeribitClient  │    │   VixClient      │
+│  chunked fetch  │    │  daily → hourly  │
+└────────┬────────┘    └────────┬─────────┘
+         │                      │
+         └──────────┬───────────┘
+                    ▼
+         ┌──────────────────┐
+         │ ParquetRepository│
+         │  append-only I/O │
+         └────────┬─────────┘
+                  │
+                  ▼
+         data/raw/*.parquet
+         (BTC / ETH / SOL / VIX)
+                  │
+                  ▼
+         ┌──────────────────┐
+         │  src/hmm/        │
+         │  features.py     │◄── BTC, ETH, VIX as auxiliary features
+         └────────┬─────────┘
+                  ▼
+         ┌──────────────────┐
+         │  optimizer.py    │  Optuna × TimeSeriesSplit
+         │  (feature select)│  → optimal feature subset
+         └────────┬─────────┘
+                  ▼
+         ┌──────────────────┐
+         │   model.py       │  GaussianHMM fit
+         └────────┬─────────┘
+                  ▼
+         ┌──────────────────┐
+         │   predict.py     │──► regime labels + forecasts
+         └──────────────────┘
+```
+
+### Component Overview
+
+```
+src/
+├── collector/
+│   ├── deribit_client.py   ← Repository: REST API, chunked OHLCV fetch
+│   ├── vix_client.py       ← Repository: yfinance, daily→hourly resample
+│   ├── repository.py       ← Repository: Parquet append/load/last_timestamp
+│   ├── fetcher.py          ← Template Method: orchestrates all clients
+│   └── scheduler.py        ← Observer: APScheduler job registration
+│
+├── hmm/
+│   ├── features.py         ← Strategy: pluggable feature extractors
+│   ├── model.py            ← GaussianHMM wrapper
+│   ├── optimizer.py        ← Optuna + TimeSeriesSplit K-Fold
+│   └── predict.py          ← run() entry point for HMM pipeline
+│
+└── utils/
+    └── paths.py            ← central path resolution from settings.yaml
+```
+
+### Sequence: Incremental Fetch
+
+```
+Fetcher                  ParquetRepository        DeribitClient
+   │                            │                       │
+   │── last_timestamp(symbol) ─▶│                       │
+   │◀─ timestamp / None ────────│                       │
+   │                            │                       │
+   │  [if None]                 │                       │
+   │  start = now − 365 days    │                       │
+   │  [if timestamp]            │                       │
+   │  start = last_ts + 1h      │                       │
+   │                            │                       │
+   │── fetch_ohlcv(start, now) ─────────────────────────▶│
+   │◀─ DataFrame ───────────────────────────────────────│
+   │                            │                       │
+   │── append(symbol, df) ─────▶│                       │
+   │                            │── write Parquet ──▶ disk
+```
+
+### Sequence: Scheduler Lifecycle
+
+```
+main.py          Fetcher          APScheduler
+   │                │                  │
+   │── run(config) ▶│                  │
+   │                │── fetch all ──▶  │
+   │                │   symbols        │
+   │                │── register job ─▶│
+   │                │                  │── every 3600s ──▶ fetcher.run()
+   │                │                  │── every 3600s ──▶ fetcher.run()
+   │                │                  │        ...
+   │◀── Ctrl+C ─────────────────────── │
+   │                │── shutdown ──────▶│
 ```
 
 ### Module Breakdown
 
-| Module | Path | Responsibility |
-|---|---|---|
-| collector | `src/collector/` | Deribit client, VIX fetch, Parquet storage, APScheduler |
-| hmm | `src/hmm/` | Feature engineering, GaussianHMM, Bayesian optimization, prediction |
+| Module | Path | Pattern | Responsibility |
+|---|---|---|---|
+| collector | `src/collector/` | Repository, Template Method | Deribit client, VIX fetch, Parquet storage, APScheduler |
+| hmm | `src/hmm/` | Strategy, Factory | Feature engineering, GaussianHMM, Bayesian optimization, prediction |
 
 ---
 
@@ -71,27 +155,31 @@ pre-commit install
 All runtime parameters live in `config/settings.yaml`. No hard-coded values in source files.
 
 ```yaml
-# config/settings.yaml (example — actual file is the authoritative reference)
-
 symbols:
-  deribit: [BTC, ETH, SOL]       # instruments to collect
-  vix: "^VIX"                    # yfinance ticker
+  deribit:
+    - instrument: BTC-PERPETUAL       # Deribit instrument name
+      symbol: BTC                     # local file/column identifier
+    - instrument: ETH-PERPETUAL
+      symbol: ETH
+    - instrument: SOL_USDC-PERPETUAL
+      symbol: SOL
+  vix: "^VIX"                         # yfinance ticker
 
 collector:
-  resolution: 3600               # candle interval in seconds (1h)
-  history_days: 365              # initial backfill window
-  schedule_interval: 3600        # APScheduler interval in seconds
+  resolution: 60                      # candle interval in minutes (60 = 1h)
+  history_days: 365                   # initial backfill window in days
+  schedule_interval: 3600             # APScheduler interval in seconds
 
 storage:
-  raw_dir: data/raw              # Parquet output directory
+  raw_dir: data/raw                   # Parquet output directory (gitignored)
 
 hmm:
-  n_components: [2, 3, 4]        # regime count search space
-  n_splits: 5                    # TimeSeriesSplit folds
-  n_trials: 100                  # Optuna trials
+  n_components: [2, 3, 4]            # regime count search space for Optuna
+  n_splits: 5                        # TimeSeriesSplit K-Fold count
+  n_trials: 100                      # Optuna optimization trials
 
 logging:
-  level: INFO
+  level: INFO                        # DEBUG / INFO / WARNING / ERROR
 ```
 
 ---
