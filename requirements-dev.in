@@ -1,0 +1,13 @@
+# Development dependencies
+# Generate pinned requirements-dev.txt with: pip-compile requirements-dev.in
+
+-r requirements.in
+
+pip-tools
+pre-commit
+pytest
+pytest-cov
+mypy
+ruff
+types-PyYAML
+pandas-stubs

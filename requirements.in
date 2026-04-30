@@ -1,0 +1,13 @@
+# Runtime dependencies
+# Generate pinned requirements.txt with: pip-compile requirements.in
+
+hmmlearn
+optuna
+scikit-learn
+apscheduler
+pandas
+pyarrow
+yfinance
+httpx
+pyyaml
+python-dotenv
