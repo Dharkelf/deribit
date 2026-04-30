@@ -21,6 +21,9 @@ build/
 # macOS
 .DS_Store
 
+# pytest
+.pytest_cache/
+
 # Jupyter
 .ipynb_checkpoints/
 
