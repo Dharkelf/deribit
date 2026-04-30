@@ -1,0 +1,25 @@
+symbols:
+  deribit:
+    - instrument: BTC-PERPETUAL
+      symbol: BTC
+    - instrument: ETH-PERPETUAL
+      symbol: ETH
+    - instrument: SOL_USDC-PERPETUAL
+      symbol: SOL
+  vix: "^VIX"
+
+collector:
+  resolution: 60              # candle interval in minutes (1h = 60)
+  history_days: 365           # initial backfill window in days
+  schedule_interval: 3600     # APScheduler interval in seconds
+
+storage:
+  raw_dir: data/raw           # Parquet output directory
+
+hmm:
+  n_components: [2, 3, 4]     # regime count search space
+  n_splits: 5                 # TimeSeriesSplit folds
+  n_trials: 100               # Optuna trials
+
+logging:
+  level: INFO

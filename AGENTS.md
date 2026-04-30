@@ -23,8 +23,7 @@ Do NOT deviate from it without explicit user instruction.
 ├── AGENTS.md               # this file — agent instructions
 ├── CLAUDE.md               # optional project-level Claude overrides
 ├── README.md
-├── requirements.txt        # pinned dependencies (pip-compile output)
-├── requirements-dev.txt    # dev/test dependencies
+├── requirements.txt        # pinned dependencies (pip freeze output)
 ├── .gitignore
 ├── .env.example            # env-var template, never commit .env
 │
@@ -84,6 +83,8 @@ Configuration lives in `.pre-commit-config.yaml` at the project root. Hooks run 
 - **ruff** — linting + formatting, auto-fixes where possible (`ruff check --fix`, `ruff format`)
 - **mypy** — strict static type checking; all public functions must have type annotations
 - **pytest** — full test suite must pass (`pytest tests/`); commit is blocked on any test failure
+
+`pre-commit` is listed in `requirements.txt` and installed via `pip install -r requirements.txt`.
 
 To run manually against all files:
 ```bash
