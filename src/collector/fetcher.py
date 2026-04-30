@@ -18,6 +18,7 @@ import pandas as pd
 from src.collector.deribit_client import DeribitClient
 from src.collector.fema_client import FemaClient
 from src.collector.gdelt_client import GdeltClient
+from src.collector.options_client import DeribitOptionsClient
 from src.collector.repository import ParquetRepository
 from src.collector.vix_client import VixClient
 from src.utils.paths import raw_dir
@@ -35,6 +36,7 @@ def run(config: dict) -> None:
     _fetch_vix(config, repo, history_days)
     _fetch_fema(repo, history_days)
     _fetch_gdelt(repo, history_days)
+    _fetch_options_max_pain(config, repo)
 
 
 def _fetch_deribit(
@@ -87,6 +89,21 @@ def _fetch_gdelt(repo: ParquetRepository, history_days: int) -> None:
     logger.info("Fetching GDELT military score from %s to %s", start.date(), end.date())
     with GdeltClient() as client:
         df = client.fetch_daily_score(start, end)
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_options_max_pain(config: dict, repo: ParquetRepository) -> None:
+    symbol = "BTC_OPTIONS_MAX_PAIN"
+    days_ahead: int = config.get("options", {}).get("max_pain_days_ahead", 30)
+    last = repo.last_timestamp(symbol)
+    today = datetime.now(tz=timezone.utc).date()
+    if last is not None and last.date() >= today:
+        logger.info("Options max pain already up to date")
+        return
+    logger.info("Fetching BTC options max pain (next %d days)", days_ahead)
+    with DeribitOptionsClient(days_ahead=days_ahead) as client:
+        df = client.fetch_daily_snapshot()
     repo.append(symbol, df)
     repo.save_sample(symbol)
 

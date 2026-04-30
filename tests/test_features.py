@@ -10,6 +10,7 @@ from src.hmm.features import (
     DisasterExtractor,
     LogDiffReturnExtractor,
     MarketCloseExtractor,
+    MaxPainExtractor,
     MilitaryExtractor,
     MomentumExtractor,
     RollingCorrelationExtractor,
@@ -20,7 +21,7 @@ from src.hmm.features import (
 )
 
 
-def _make_common_df(n: int = 400) -> pd.DataFrame:
+def _make_common_df(n: int = 400, with_max_pain: bool = True) -> pd.DataFrame:
     """Minimal common DataFrame with all required symbol + soft-signal columns."""
     index = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
     index.name = "timestamp"
@@ -34,6 +35,8 @@ def _make_common_df(n: int = 400) -> pd.DataFrame:
     # soft signals
     df["FEMA_score"] = rng.uniform(0, 1, n)
     df["GDELT_military_score"] = rng.uniform(0, 1, n)
+    if with_max_pain:
+        df["BTC_options_max_pain"] = df["BTC_close"] * rng.uniform(0.8, 1.2, n)
     return df
 
 
@@ -113,6 +116,21 @@ def test_military_passthrough() -> None:
     original = df["GDELT_military_score"].copy()
     df = MilitaryExtractor().transform(df)
     pd.testing.assert_series_equal(df["GDELT_military_score"], original)
+
+
+def test_max_pain_diff_computed() -> None:
+    df = MaxPainExtractor().transform(_make_common_df())
+    assert "max_pain_diff_usd" in df.columns
+    assert "max_pain_diff_pct" in df.columns
+    # diff = max_pain - btc_close — should not all be zero
+    assert not (df["max_pain_diff_usd"] == 0.0).all()
+
+
+def test_max_pain_nan_when_column_missing() -> None:
+    df = _make_common_df(with_max_pain=False)
+    df = MaxPainExtractor().transform(df)
+    assert df["max_pain_diff_usd"].isna().all()
+    assert df["max_pain_diff_pct"].isna().all()
 
 
 def test_disaster_fills_zero_when_column_missing() -> None:

@@ -88,7 +88,11 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     combined = combined.reindex(full_index).ffill()
 
     # --- Soft signals (optional) ---
-    for symbol, col in [("FEMA", "FEMA_score"), ("GDELT", "GDELT_military_score")]:
+    for symbol, col in [
+        ("FEMA", "FEMA_score"),
+        ("GDELT", "GDELT_military_score"),
+        ("BTC_OPTIONS_MAX_PAIN", "BTC_options_max_pain"),
+    ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
             s = pd.read_parquet(path)[col]
@@ -334,6 +338,33 @@ class MarketCloseExtractor(FeatureExtractor):
         return df
 
 
+class MaxPainExtractor(FeatureExtractor):
+    """BTC Options Max Pain feature — distance from current price to next-month pain level.
+
+    Mean max pain strike across all BTC option expiries in the next 30 days,
+    expressed as difference and percentage relative to the current BTC price.
+
+    Interpretation: negative = max pain below current price (bearish gravitational pull),
+    positive = max pain above current price (bullish gravitational pull).
+    Values between data points are forward-filled (fetched daily, used hourly).
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["max_pain_diff_usd", "max_pain_diff_pct"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "BTC_options_max_pain" not in df.columns:
+            df["max_pain_diff_usd"] = np.nan
+            df["max_pain_diff_pct"] = np.nan
+            return df
+        mp = df["BTC_options_max_pain"]
+        btc = df["BTC_close"]
+        df["max_pain_diff_usd"] = mp - btc
+        df["max_pain_diff_pct"] = (mp - btc) / btc
+        return df
+
+
 class DisasterExtractor(FeatureExtractor):
     """FEMA US disaster severity score [0, 1] as a soft feature.
 
@@ -382,6 +413,7 @@ ALL_EXTRACTORS: list[FeatureExtractor] = [
     MomentumExtractor(),
     BtcLagExtractor(),
     MarketCloseExtractor(),
+    MaxPainExtractor(),
     DisasterExtractor(),
     MilitaryExtractor(),
 ]
