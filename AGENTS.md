@@ -192,7 +192,7 @@ It serves as the authoritative technical wiki for the project.
 | Section | Content |
 |---|---|
 | **Overview** | What the project does and why it exists (2–4 sentences) |
-| **Architecture** | Module breakdown + ASCII or Mermaid data flow diagram |
+| **Architecture** | Module breakdown + mandatory ASCII diagram (data flow, component relationships) |
 | **Setup** | Prerequisites, venv creation, `pip install -r requirements.txt`, `pre-commit install` |
 | **Configuration** | Every key in `config/settings.yaml` explained with example values |
 | **Usage** | All CLI entry points with example commands |
@@ -200,11 +200,37 @@ It serves as the authoritative technical wiki for the project.
 | **Development** | How to run tests (`pytest tests/`), linting (`pre-commit run --all-files`), add a module |
 | **References** | External APIs, papers, related repos with links |
 
+### ASCII Diagrams
+
+Every architectural or technical concept that benefits from a visual must be expressed as an ASCII diagram
+directly in `README.md`. Do not use external image files or links to diagram tools.
+
+Required diagrams:
+- **Data flow** — how data moves from source (API) through modules to storage and output
+- **Module/component overview** — boxes and arrows showing which modules depend on which
+- **Sequence diagrams** — for non-obvious flows (e.g. incremental fetch logic, scheduler lifecycle)
+
+Use standard ASCII box-drawing characters:
+
+```
+┌─────────────┐       ┌─────────────┐
+│  Component  │──────▶│  Component  │
+└─────────────┘       └─────────────┘
+
+Source ──► Transform ──► Sink
+
+A
+│
+├── child 1
+└── child 2
+```
+
 ### Rules
 
 - Keep `README.md` up to date whenever a module, config key, or CLI argument changes.
-- When adding a new feature, update `README.md` in the same commit.
+- When adding a new feature, update `README.md` and its diagrams in the same commit.
 - Do not summarise code that can be read directly — document *how to use* and *why it works this way*.
+- Never replace ASCII diagrams with Mermaid, PlantUML, or image embeds.
 
 ---
 
