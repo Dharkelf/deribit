@@ -69,6 +69,19 @@ Do NOT deviate from it without explicit user instruction.
 
 ---
 
+## Testing
+
+Every significant code change must be covered by tests before it is committed.
+
+- **Unit tests** — test individual functions and classes in isolation; mock external dependencies (API calls, file I/O).
+- **Integration tests** — test module interactions end-to-end; use real Parquet files and real data structures, not mocks.
+- All tests live in `tests/` and follow the naming convention `test_<module>.py`.
+- Run the full test suite before every commit: `pytest tests/`
+- A change is considered covered when both the happy path and the main failure modes are tested.
+- Time-series models: integration tests must use `TimeSeriesSplit` — never shuffle data in tests.
+
+---
+
 ## Coding Conventions
 
 - **Python 3.11+**
