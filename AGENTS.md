@@ -105,6 +105,26 @@ Every significant code change must be covered by tests before it is committed.
 
 ---
 
+## Design Patterns
+
+Prefer established, well-understood design patterns over custom solutions. This keeps the codebase
+predictable and easy to extend. Preferred patterns for this project:
+
+| Pattern | When to use |
+|---|---|
+| **Repository** | Isolate all data access (Parquet read/write) behind a single class per symbol |
+| **Strategy** | Interchangeable algorithms — e.g. different HMM variants or feature extractors |
+| **Factory** | Construct configured model or client objects from `settings.yaml` |
+| **Observer / Callback** | APScheduler job hooks, progress notifications |
+| **Template Method** | Base class defines the pipeline skeleton; subclasses override steps |
+
+Rules:
+- Do not invent abstractions unless a standard pattern fits and adds clarity.
+- Name classes after the pattern they implement where it aids comprehension (`DeribitRepository`, `FeatureStrategy`).
+- Patterns must be documented in the module docstring so the intent is clear.
+
+---
+
 ## Coding Conventions
 
 - **Python 3.11+**
