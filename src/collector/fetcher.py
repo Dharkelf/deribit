@@ -41,6 +41,7 @@ def _fetch_deribit(
             logger.info("Fetching %s (%s) from %s to %s", symbol, instrument, start.date(), end.date())
             df = client.fetch_ohlcv(instrument, start, end)
             repo.append(symbol, df)
+            repo.save_sample(symbol)
 
 
 def _fetch_vix(
@@ -55,6 +56,7 @@ def _fetch_vix(
     client = VixClient(ticker=ticker)
     df = client.fetch_ohlcv(start, end)
     repo.append(symbol, df)
+    repo.save_sample(symbol)
 
 
 def _time_range(

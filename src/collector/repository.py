@@ -37,6 +37,22 @@ class ParquetRepository:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         return pd.read_parquet(path)
 
+    def save_sample(self, symbol: str, n: int = 10) -> None:
+        """Write *n* random rows from the stored Parquet to data/raw/samples/<symbol>.csv.
+
+        CSV is used intentionally — samples are for human inspection only.
+        The file is overwritten on every call so it always reflects recent data.
+        """
+        df = self.load(symbol)
+        if df.empty:
+            return
+        sample = df.sample(n=min(n, len(df)), random_state=None).sort_index()
+        sample_dir = self._dir / "samples"
+        sample_dir.mkdir(exist_ok=True)
+        path = sample_dir / f"{symbol}.csv"
+        sample.to_csv(path)
+        logger.info("Sample saved: %s (%d rows) → %s", symbol, len(sample), path)
+
     def append(self, symbol: str, df: pd.DataFrame) -> None:
         """Append *df* to the existing Parquet file for *symbol*.
 

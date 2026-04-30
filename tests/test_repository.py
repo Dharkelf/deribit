@@ -55,3 +55,31 @@ def test_append_empty_df_is_noop(tmp_path: object) -> None:
     repo = ParquetRepository(tmp_path)
     repo.append("BTC", pd.DataFrame())
     assert not (tmp_path / "BTC.parquet").exists()
+
+
+def test_save_sample_creates_csv(tmp_path: object) -> None:
+    repo = ParquetRepository(tmp_path)
+    df = _sample_df([f"2024-01-01T{h:02d}:00:00" for h in range(20)])
+    repo.append("BTC", df)
+    repo.save_sample("BTC", n=10)
+
+    sample_path = tmp_path / "samples" / "BTC.csv"
+    assert sample_path.exists()
+    sample = pd.read_csv(sample_path, index_col=0, parse_dates=True)
+    assert len(sample) == 10
+
+
+def test_save_sample_capped_at_available_rows(tmp_path: object) -> None:
+    repo = ParquetRepository(tmp_path)
+    df = _sample_df(["2024-01-01T00:00:00", "2024-01-01T01:00:00"])
+    repo.append("BTC", df)
+    repo.save_sample("BTC", n=10)
+
+    sample = pd.read_csv(tmp_path / "samples" / "BTC.csv", index_col=0)
+    assert len(sample) == 2  # only 2 rows available
+
+
+def test_save_sample_noop_when_no_data(tmp_path: object) -> None:
+    repo = ParquetRepository(tmp_path)
+    repo.save_sample("BTC")  # no parquet exists yet
+    assert not (tmp_path / "samples").exists()
