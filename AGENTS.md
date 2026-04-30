@@ -71,8 +71,7 @@ Do NOT deviate from it without explicit user instruction.
 
 ## Pre-commit Hooks
 
-Every commit is automatically checked by `ruff` (linting + formatting) and `mypy` (static type checking)
-via pre-commit hooks. No commit may pass with ruff errors or mypy type violations.
+Every commit is automatically checked via pre-commit hooks. No commit may pass with errors.
 
 Setup (once per developer machine):
 ```bash
@@ -80,11 +79,11 @@ pip install pre-commit
 pre-commit install
 ```
 
-Configuration lives in `.pre-commit-config.yaml` at the project root.
-Add `pre-commit` to `requirements-dev.txt`.
+Configuration lives in `.pre-commit-config.yaml` at the project root. Hooks run in this order:
 
-- **ruff** — replaces flake8, isort, pyupgrade; auto-fixes where possible (`ruff check --fix`, `ruff format`)
-- **mypy** — strict mode; all public functions must have type annotations
+- **ruff** — linting + formatting, auto-fixes where possible (`ruff check --fix`, `ruff format`)
+- **mypy** — strict static type checking; all public functions must have type annotations
+- **pytest** — full test suite must pass (`pytest tests/`); commit is blocked on any test failure
 
 To run manually against all files:
 ```bash
@@ -167,18 +166,18 @@ Every significant code change must be covered by tests before it is committed.
 `README.md` is mandatory in every project and MUST be committed to git.
 It serves as the authoritative technical wiki for the project.
 
-### Required Sections
+### Required Sections (in this order)
 
 | Section | Content |
 |---|---|
-| **Overview** | What the project does and why it exists |
-| **Architecture** | Module breakdown, data flow diagram (ASCII or Mermaid) |
-| **Setup** | Prerequisites, venv creation, `pip install -r requirements.txt` |
-| **Configuration** | All keys in `config/settings.yaml` explained |
-| **Usage** | How to run the collector, the HMM pipeline, the scheduler |
-| **Data** | Schema of stored Parquet files, symbol conventions |
-| **Development** | How to run tests, linting, adding a new module |
-| **References** | External APIs, papers, related repos |
+| **Overview** | What the project does and why it exists (2–4 sentences) |
+| **Architecture** | Module breakdown + ASCII or Mermaid data flow diagram |
+| **Setup** | Prerequisites, venv creation, `pip install -r requirements.txt`, `pre-commit install` |
+| **Configuration** | Every key in `config/settings.yaml` explained with example values |
+| **Usage** | All CLI entry points with example commands |
+| **Data** | Schema of stored files, column types, naming conventions |
+| **Development** | How to run tests (`pytest tests/`), linting (`pre-commit run --all-files`), add a module |
+| **References** | External APIs, papers, related repos with links |
 
 ### Rules
 
