@@ -181,6 +181,7 @@ It serves as the authoritative technical wiki for the project.
 - `data/` and `.venv/` are in `.gitignore` — never commit raw data or virtual environments.
 - `config/settings.yaml` IS committed (no secrets in it).
 - Secrets go in `.env` (gitignored); document them in `.env.example`.
+- **Never push automatically.** `git push` only on explicit user request ("push", "synchronisiere", "push to GitHub").
 - Commit messages follow **Conventional Commits**: `<type>(<scope>): <subject>`
   - Subject: imperative mood, max 72 chars, no full stop
   - Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`
