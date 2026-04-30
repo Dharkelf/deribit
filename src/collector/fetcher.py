@@ -1,7 +1,13 @@
-"""Fetcher — orchestrates DeribitClient, VixClient and ParquetRepository.
+"""Fetcher — orchestrates all data clients and ParquetRepository.
 
 For each symbol: checks the last stored timestamp, fetches only missing
-candles (incremental update), and appends to Parquet.
+data (incremental update), and appends to Parquet.
+
+Sources:
+  - Deribit REST API  → BTC, ETH, SOL (OHLCV, hourly)
+  - yfinance          → VIX (daily → forward-filled hourly)
+  - FEMA OpenFEMA     → US disaster severity score (daily)
+  - GDELT DOC 2.0     → US military activity score (daily)
 """
 
 import logging
@@ -10,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from src.collector.deribit_client import DeribitClient
+from src.collector.fema_client import FemaClient
+from src.collector.gdelt_client import GdeltClient
 from src.collector.repository import ParquetRepository
 from src.collector.vix_client import VixClient
 from src.utils.paths import raw_dir
@@ -25,6 +33,8 @@ def run(config: dict) -> None:
 
     _fetch_deribit(config, repo, history_days, resolution)
     _fetch_vix(config, repo, history_days)
+    _fetch_fema(repo, history_days)
+    _fetch_gdelt(repo, history_days)
 
 
 def _fetch_deribit(
@@ -38,7 +48,10 @@ def _fetch_deribit(
             instrument: str = entry["instrument"]
             symbol: str = entry["symbol"]
             start, end = _time_range(repo, symbol, history_days)
-            logger.info("Fetching %s (%s) from %s to %s", symbol, instrument, start.date(), end.date())
+            logger.info(
+                "Fetching %s (%s) from %s to %s",
+                symbol, instrument, start.date(), end.date(),
+            )
             df = client.fetch_ohlcv(instrument, start, end)
             repo.append(symbol, df)
             repo.save_sample(symbol)
@@ -53,8 +66,27 @@ def _fetch_vix(
     ticker: str = config["symbols"]["vix"]
     start, end = _time_range(repo, symbol, history_days)
     logger.info("Fetching VIX (%s) from %s to %s", ticker, start.date(), end.date())
-    client = VixClient(ticker=ticker)
-    df = client.fetch_ohlcv(start, end)
+    df = VixClient(ticker=ticker).fetch_ohlcv(start, end)
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_fema(repo: ParquetRepository, history_days: int) -> None:
+    symbol = "FEMA"
+    start, end = _time_range(repo, symbol, history_days)
+    logger.info("Fetching FEMA disaster score from %s to %s", start.date(), end.date())
+    with FemaClient() as client:
+        df = client.fetch_daily_score(start, end)
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_gdelt(repo: ParquetRepository, history_days: int) -> None:
+    symbol = "GDELT"
+    start, end = _time_range(repo, symbol, history_days)
+    logger.info("Fetching GDELT military score from %s to %s", start.date(), end.date())
+    with GdeltClient() as client:
+        df = client.fetch_daily_score(start, end)
     repo.append(symbol, df)
     repo.save_sample(symbol)
 
