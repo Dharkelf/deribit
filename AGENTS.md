@@ -7,7 +7,8 @@ Read it before making any structural or architectural decisions.
 
 ## Project Purpose
 
-Automated collection of Deribit spot data (BTC, ETH, SOL) and VIX, stored locally as Parquet files.
+On-demand collection of Deribit OHLCV data (BTC, ETH, SOL) and VIX, stored locally as Parquet files.
+Data is fetched at project start with 1h candle granularity — no automated scheduler or polling.
 Regime-change detection and prediction for Solana via Hidden Markov Models,
 with Bayesian feature-subset optimization (Optuna) and time-series cross-validation.
 
@@ -63,7 +64,7 @@ Do NOT deviate from it without explicit user instruction.
 
 | Module | Path | Responsibility |
 |---|---|---|
-| collector | `src/collector/` | Deribit API client, VIX via yfinance, Parquet storage, hourly scheduler |
+| collector | `src/collector/` | Deribit API client, VIX via yfinance, incremental Parquet storage (on-demand, no scheduler) |
 | hmm | `src/hmm/` | Feature engineering, GaussianHMM, Bayesian optimization, K-Fold evaluation |
 
 ---

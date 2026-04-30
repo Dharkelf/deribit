@@ -9,8 +9,9 @@ for Solana using Hidden Markov Models with Bayesian feature optimization.
 
 Two-module Python pipeline:
 
-1. **Collector** — pulls hourly OHLCV data for BTC, ETH, SOL from Deribit and VIX from Yahoo Finance.
-   Runs 24/7 via APScheduler, backfills up to 1 year of history, stores data as Parquet files locally.
+1. **Collector** — pulls hourly OHLCV data (1h candles) for BTC, ETH, SOL from Deribit and VIX from
+   Yahoo Finance on demand at project start. Backfills up to 1 year of history on first run,
+   then fetches only missing candles on subsequent runs. No automated scheduler.
 
 2. **HMM** — detects and predicts market regimes for Solana using a Gaussian HMM.
    Features are drawn from BTC, ETH and VIX time series. Optimal feature subset is found via
@@ -73,8 +74,7 @@ src/
 │   ├── deribit_client.py   ← Repository: REST API, chunked OHLCV fetch
 │   ├── vix_client.py       ← Repository: yfinance, daily→hourly resample
 │   ├── repository.py       ← Repository: Parquet append/load/last_timestamp
-│   ├── fetcher.py          ← Template Method: orchestrates all clients
-│   └── scheduler.py        ← Observer: APScheduler job registration
+│   └── fetcher.py          ← Template Method: orchestrates all clients (on-demand)
 │
 ├── hmm/
 │   ├── features.py         ← Strategy: pluggable feature extractors
@@ -106,27 +106,31 @@ Fetcher                  ParquetRepository        DeribitClient
    │                            │── write Parquet ──▶ disk
 ```
 
-### Sequence: Scheduler Lifecycle
+### Sequence: On-Demand Fetch (project start)
 
 ```
-main.py          Fetcher          APScheduler
-   │                │                  │
-   │── run(config) ▶│                  │
-   │                │── fetch all ──▶  │
-   │                │   symbols        │
-   │                │── register job ─▶│
-   │                │                  │── every 3600s ──▶ fetcher.run()
-   │                │                  │── every 3600s ──▶ fetcher.run()
-   │                │                  │        ...
-   │◀── Ctrl+C ─────────────────────── │
-   │                │── shutdown ──────▶│
+main.py          Fetcher          ParquetRepository     API (Deribit / VIX)
+   │                │                    │                       │
+   │── run(config) ▶│                    │                       │
+   │                │── last_timestamp ─▶│                       │
+   │                │◀─ ts / None ───────│                       │
+   │                │                    │                       │
+   │                │  start = last_ts + 1h  (or now − 365d)     │
+   │                │                    │                       │
+   │                │── fetch_ohlcv(start, now) ────────────────▶│
+   │                │◀─ DataFrame ───────────────────────────────│
+   │                │                    │                       │
+   │                │── append(symbol) ─▶│                       │
+   │                │                    │── write Parquet ──▶ disk
+   │                │                    │                       │
+   │◀── done ───────│                    │                       │
 ```
 
 ### Module Breakdown
 
 | Module | Path | Pattern | Responsibility |
 |---|---|---|---|
-| collector | `src/collector/` | Repository, Template Method | Deribit client, VIX fetch, Parquet storage, APScheduler |
+| collector | `src/collector/` | Repository, Template Method | Deribit client, VIX fetch, incremental Parquet storage (on-demand) |
 | hmm | `src/hmm/` | Strategy, Factory | Feature engineering, GaussianHMM, Bayesian optimization, prediction |
 
 ---
@@ -168,7 +172,6 @@ symbols:
 collector:
   resolution: 60                      # candle interval in minutes (60 = 1h)
   history_days: 365                   # initial backfill window in days
-  schedule_interval: 3600             # APScheduler interval in seconds
 
 storage:
   raw_dir: data/raw                   # Parquet output directory (gitignored)
@@ -186,7 +189,7 @@ logging:
 
 ## Usage
 
-**Run the collector once (backfill + schedule):**
+**Fetch all market data (backfill on first run, incremental on subsequent runs):**
 ```bash
 python main.py collect
 ```
