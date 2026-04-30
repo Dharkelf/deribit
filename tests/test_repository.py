@@ -27,6 +27,7 @@ def test_append_and_load_roundtrip(tmp_path: object) -> None:
 
     assert len(loaded) == 2
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
+    assert loaded.index.name == "timestamp"
 
 
 def test_append_deduplicates(tmp_path: object) -> None:

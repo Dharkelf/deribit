@@ -30,6 +30,7 @@ def test_fetch_returns_hourly_dataframe(mock_download: object) -> None:
     assert not df.empty
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df.index.tz is not None
+    assert df.index.name == "timestamp"  # consistent index name for common DataFrame
     # daily → hourly: each day yields 24 rows after ffill
     assert len(df) >= 24
 

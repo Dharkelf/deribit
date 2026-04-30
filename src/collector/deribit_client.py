@@ -95,6 +95,7 @@ class DeribitClient:
             return pd.DataFrame()
 
         index = pd.to_datetime(data["ticks"], unit="ms", utc=True)
+        index.name = "timestamp"
         return pd.DataFrame(
             {
                 "open": data["open"],

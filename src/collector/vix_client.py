@@ -49,16 +49,21 @@ class VixClient:
             raw.columns = raw.columns.get_level_values(0)
 
         raw.index = pd.to_datetime(raw.index, utc=True)
+        raw.index.name = "timestamp"
         raw = raw[["Open", "High", "Low", "Close"]].rename(
             columns={"Open": "open", "High": "high", "Low": "low", "Close": "close"}
         )
         raw["volume"] = 0.0
 
+        # resample to hourly, then filter to hours that exist in the Deribit range
+        # so VIX aligns on the same UTC timestamp grid
         hourly = (
             raw.resample("1h")
             .ffill()
+            .loc[start:end]
             .dropna()
         )
+        hourly.index.name = "timestamp"
 
         logger.info("Fetched %d hourly VIX rows (%s → %s)", len(hourly), start.date(), end.date())
         return hourly

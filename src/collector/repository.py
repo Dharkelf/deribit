@@ -54,5 +54,6 @@ class ParquetRepository:
             combined = df.copy()
 
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+        combined.index.name = "timestamp"
         combined.to_parquet(path)
         logger.info("Saved %d rows for %s → %s", len(combined), symbol, path.name)

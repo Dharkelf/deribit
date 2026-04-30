@@ -46,7 +46,8 @@ def test_fetch_ohlcv_returns_dataframe(mock_client_cls: MagicMock) -> None:
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert len(df) == 3
-    assert df.index.tz is not None  # UTC-aware
+    assert df.index.tz is not None       # UTC-aware
+    assert df.index.name == "timestamp"  # consistent index name for common DataFrame
 
 
 @patch("src.collector.deribit_client.httpx.Client")
