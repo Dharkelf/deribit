@@ -69,6 +69,30 @@ Do NOT deviate from it without explicit user instruction.
 
 ---
 
+## Pre-commit Hooks
+
+Every commit is automatically checked by `ruff` (linting + formatting) and `mypy` (static type checking)
+via pre-commit hooks. No commit may pass with ruff errors or mypy type violations.
+
+Setup (once per developer machine):
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Configuration lives in `.pre-commit-config.yaml` at the project root.
+Add `pre-commit` to `requirements-dev.txt`.
+
+- **ruff** — replaces flake8, isort, pyupgrade; auto-fixes where possible (`ruff check --fix`, `ruff format`)
+- **mypy** — strict mode; all public functions must have type annotations
+
+To run manually against all files:
+```bash
+pre-commit run --all-files
+```
+
+---
+
 ## Testing
 
 Every significant code change must be covered by tests before it is committed.
