@@ -22,7 +22,7 @@ def _make_api_response(n_records: int = 5) -> dict:
         }
         for i in range(1, n_records + 1)
     ]
-    return {"DisasterDeclarations": records}
+    return {"DisasterDeclarationsSummaries": records}
 
 
 @patch("src.collector.fema_client.httpx.Client")
@@ -45,7 +45,7 @@ def test_fetch_daily_score_returns_dataframe(mock_cls: MagicMock) -> None:
 @patch("src.collector.fema_client.httpx.Client")
 def test_fetch_daily_score_returns_zeros_on_empty(mock_cls: MagicMock) -> None:
     mock_resp = MagicMock()
-    mock_resp.json.return_value = {"DisasterDeclarations": []}
+    mock_resp.json.return_value = {"DisasterDeclarationsSummaries": []}
     mock_resp.raise_for_status = MagicMock()
     mock_cls.return_value.get.return_value = mock_resp
 
@@ -54,6 +54,21 @@ def test_fetch_daily_score_returns_zeros_on_empty(mock_cls: MagicMock) -> None:
     result = client.fetch_daily_score(_utc(2024, 3, 1), _utc(2024, 3, 7))
 
     assert (result["FEMA_score"] == 0.0).all()
+
+
+@patch("src.collector.fema_client.httpx.Client")
+def test_fetch_uses_correct_endpoint(mock_cls: MagicMock) -> None:
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _make_api_response(3)
+    mock_resp.raise_for_status = MagicMock()
+    mock_cls.return_value.get.return_value = mock_resp
+
+    client = FemaClient()
+    client._http = mock_cls.return_value
+    client.fetch_daily_score(_utc(2024, 3, 1), _utc(2024, 3, 7))
+
+    called_path = mock_cls.return_value.get.call_args[0][0]
+    assert called_path == "/DisasterDeclarationsSummaries", f"wrong endpoint: {called_path}"
 
 
 @patch("src.collector.fema_client.httpx.Client")

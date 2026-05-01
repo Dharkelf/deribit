@@ -71,13 +71,13 @@ class FemaClient:
                 "$skip": skip,
             }
             try:
-                resp = self._http.get("/disasterDeclarations", params=params)
+                resp = self._http.get("/DisasterDeclarationsSummaries", params=params)
                 resp.raise_for_status()
             except Exception as exc:
                 logger.warning("FEMA API error: %s", exc)
                 break
 
-            batch = resp.json().get("DisasterDeclarations", [])
+            batch = resp.json().get("DisasterDeclarationsSummaries", [])
             if not batch:
                 break
             records.extend(batch)
