@@ -84,71 +84,88 @@ Daily noise (±0.01 pp) is correctly filtered by the 0.10 pp threshold.
 
 ---
 
-## HMM Optimisation — first full run (2026-05-01)
+## HMM Optimisation — run 2 (2026-05-01, blueprint selection score)
+
+**Objective changed** from mean CV log-likelihood per sample to composite regime-quality score:
+```
+score = 3.0·avg_self_transition + 1.5·min_state_fraction
+      − 0.25·median_run_days − 2.5·avg_entropy
+      + 0.05·loglik_per_obs_feat
+```
+Eligibility gate: min_state_fraction ≥ 0.05 per fold (collapsed-state models pruned).
+Optuna minimises −mean(score); higher score = better regime structure.
 
 ```
 python main.py hmm
-Runtime: 1.7 minutes (100 trials, 5 folds, 39 viable features)
+Runtime: ~2.9 minutes (100 trials, 5 folds, 33 viable optional features)
 ```
 
 ### Optuna study
 
 | Metric | Value |
 |---|---|
-| Trials completed | 100 / 100 |
-| Trials pruned | 0 |
-| Features excluded (coverage <50%) | 4 (all max pain) |
-| Viable optional features | 39 |
-| Best objective (−mean CV LL/sample) | −88.71 |
-| Best n_components | 3 |
-| Best feature count | 33 (incl. SOL_log_return) |
+| Trials completed | 99 / 100 |
+| Trials pruned | 1 |
+| Features excluded (coverage <50%) | 10 (4 max pain + 6 market-close; pandas-market-calendars not installed) |
+| Viable optional features | 33 |
+| Best score (−objective) | 3.2904 |
+| Best n_components | 2 |
+| Best feature count | 14 (13 optional + SOL_log_return) |
 
 ### Top 5 feature configs
 
-| Rank | k | Features | Objective |
+| Rank | k | Features | Score |
 |---|---|---|---|
-| 1 | 3 | 33 | −88.71 |
-| 2 | 3 | 32 | −86.64 |
-| 3 | 3 | 32 | −86.33 |
-| 4 | 3 | 31 | −84.39 |
-| 5 | 3 | 26 | −84.26 |
+| 1 | 2 | 14 | 3.2904 |
+| 2 | 2 | 14 | 3.2646 |
+| 3 | 2 | 17 | 3.2530 |
+| 4 | 2 | 12 | 3.2496 |
+| 5 | 2 | 12 | 3.2375 |
 
-All top-5 configs use k=3 regimes. Features consistently selected across top configs:
-- All log-returns (BTC, ETH, SOL, VIX)
-- All rolling volatilities (24h + 168h, all symbols)
-- SOL↔BTC/ETH correlations (24h + 168h)
-- BTC lags 2h–24h (1h lag consistently dropped)
-- Market close features (XETRA, NYSE, TSE)
-- FEMA score, Crypto Fear & Greed, `fed_rate_last_change`
-- `VIX_change_24h`, ETH + SOL momentum
+All top-5 configs use k=2 regimes. The selection score heavily penalises
+state collapse (min_state_fraction gate) and uncertain assignments (avg_entropy),
+which disfavours k=3 on this dataset length.
 
-Features consistently NOT selected in top configs:
-- `BTC_log_return_lag_1h` (1h lag)
-- `VIX_zscore` (but `VIX_change_24h` selected)
-- `BTC_momentum`
-- `fed_rate` level (but signed change selected)
+Features consistently selected across top configs:
+- `ETH_log_return`, `BTC_log_return` (log-returns)
+- `ETH_vol_168h`, `SOL_vol_24h`, `VIX_vol_24h` (volatility)
+- `SOL_ETH_corr_24h`, `VIX_change_24h` (cross-asset)
+- `BTC_log_return_lag_6h`, `BTC_log_return_lag_12h` (medium-term BTC lags)
+
+Features consistently NOT selected:
+- `BTC_log_return_lag_1h`, `BTC_log_return_lag_2h` (very short lags)
+- `VIX_zscore`, `BTC_momentum`, `SOL_momentum`, `ETH_momentum`
+- `fed_rate_last_change` (fed level `fed_rate` appears in rank 3)
+- `FEMA_score`, `GDELT_military_score`, `stock_fear_greed`
+
+`crypto_fear_greed` appears in rank 4 (only new-signal selected in top 5).
 
 ### Final model fit (best config, full dataset)
 
 ```
-Feature matrix:  8 581 rows × 33 cols
-n_components:    3
-BIC:             −2 055 153
-Log-likelihood:  1 035 683
+Feature matrix:  8 581 rows × 14 cols
+n_components:    2
+BIC:             −792 415
+Log-likelihood:  397 299
 ```
 
 ### 7-day SOL/USD forecast
 
 ```
 Last close:   $83.90  (2026-04-30)
-E[+7d]:       $83.15  (−0.9%)
-±2σ band:     [$67.42, $102.54]
+E[+7d]:       $83.53  (−0.4%)
+±2σ band:     [$68.24, $102.24]
 ```
 
-The narrow expected return (−0.9%) reflects the HMM's current-regime view: the model
-places the last observation in a low-drift regime consistent with the SOL sideways
-consolidation visible since Feb 2026. The wide ±2σ band (±22%) reflects genuine
-regime uncertainty over a 168-step horizon.
+k=2 model (Bearish / Bullish) places the last observation in a low-drift regime.
+The wide ±2σ band (±20%) reflects cumulative uncertainty over 168 hourly steps.
+
+---
+
+## HMM Optimisation — run 1 (2026-05-01, CV log-likelihood — superseded)
+
+Objective was mean CV log-likelihood per sample. Resulted in k=3 with 33 features.
+Superseded by run 2 with blueprint selection score.
 
 ---
 
