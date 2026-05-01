@@ -24,6 +24,10 @@ build/
 # pytest
 .pytest_cache/
 
+# type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
 # Jupyter
 .ipynb_checkpoints/
 
