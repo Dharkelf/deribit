@@ -6,12 +6,13 @@ suffer the greatest loss at expiration. It acts as a gravitational target for pr
 Data source: Deribit public API — no API key required.
   GET /public/get_book_summary_by_currency?currency=BTC&kind=option
 
-Storage: one row per day with the mean max pain strike across all expiries
-falling within the next `days_ahead` calendar days.
+Storage: one row per day with two max pain columns computed in a single API call:
+  BTC_options_max_pain      — mean max pain over next days_ahead (30d) expiries
+  BTC_options_max_pain_7d   — mean max pain over next days_ahead_short (7d) expiries
 
 Feature (computed in features.py at prediction time):
-  max_pain_diff     = mean_max_pain − BTC_close   (absolute USD)
-  max_pain_diff_pct = (mean_max_pain − BTC_close) / BTC_close  (fraction)
+  max_pain_diff_usd / max_pain_diff_pct         — 30d window vs BTC close
+  max_pain_7d_diff_usd / max_pain_7d_diff_pct   — 7d window vs BTC close
 """
 
 import logging
@@ -36,8 +37,9 @@ _MONTH_MAP = {
 class DeribitOptionsClient:
     """Repository for BTC Max Pain derived from Deribit options open interest."""
 
-    def __init__(self, days_ahead: int = 30) -> None:
+    def __init__(self, days_ahead: int = 30, days_ahead_short: int = 7) -> None:
         self._days_ahead = days_ahead
+        self._days_ahead_short = days_ahead_short
         self._http = httpx.Client(base_url=_BASE_URL, timeout=30.0)
 
     def close(self) -> None:
@@ -52,46 +54,49 @@ class DeribitOptionsClient:
     def fetch_daily_snapshot(self) -> pd.DataFrame:
         """Fetch current options chain and return a single-row daily snapshot.
 
-        Returns a DataFrame with columns:
-          BTC_options_max_pain   — mean max pain strike for next-month expiries
+        One API call computes both windows:
+          BTC_options_max_pain     — mean max pain over next days_ahead (30d) expiries
+          BTC_options_max_pain_7d  — mean max pain over next days_ahead_short (7d) expiries
         Indexed by today's UTC date (daily resolution).
         """
         today = datetime.now(tz=timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        cutoff = today + pd.Timedelta(days=self._days_ahead)
+        cutoff_long  = today + pd.Timedelta(days=self._days_ahead)
+        cutoff_short = today + pd.Timedelta(days=self._days_ahead_short)
+        index = pd.DatetimeIndex([today], name="timestamp")
 
         summaries = self._fetch_summaries()
         if summaries.empty:
             logger.warning("Options chain empty — max pain set to NaN")
             return pd.DataFrame(
-                {"BTC_options_max_pain": np.nan}, index=pd.DatetimeIndex([today])
+                {"BTC_options_max_pain": np.nan, "BTC_options_max_pain_7d": np.nan},
+                index=index,
             )
 
-        # Filter to expiries within the next days_ahead window
-        mask = (summaries["expiry"] >= today) & (summaries["expiry"] <= cutoff)
-        upcoming = summaries[mask]
+        def _mean_max_pain(cutoff: pd.Timestamp) -> float:
+            mask = (summaries["expiry"] >= today) & (summaries["expiry"] <= cutoff)
+            upcoming = summaries[mask]
+            if upcoming.empty:
+                return np.nan
+            pains = [
+                mp for _, g in upcoming.groupby("expiry")
+                if (mp := _compute_max_pain(g)) is not None
+            ]
+            return float(np.mean(pains)) if pains else np.nan
 
-        if upcoming.empty:
-            logger.warning("No expiries in next %d days", self._days_ahead)
-            return pd.DataFrame(
-                {"BTC_options_max_pain": np.nan}, index=pd.DatetimeIndex([today])
-            )
+        mp_30d = _mean_max_pain(cutoff_long)
+        mp_7d  = _mean_max_pain(cutoff_short)
 
-        max_pains: list[float] = []
-        for expiry, group in upcoming.groupby("expiry"):
-            mp = _compute_max_pain(group)
-            if mp is not None:
-                max_pains.append(mp)
-                logger.debug("Max pain for %s: %.0f", expiry.date(), mp)
-
-        mean_mp = float(np.mean(max_pains)) if max_pains else np.nan
-        index = pd.DatetimeIndex([today], name="timestamp")
         logger.info(
-            "BTC Max Pain (next %d days, %d expiries): %.0f",
-            self._days_ahead, len(max_pains), mean_mp,
+            "BTC Max Pain — 7d: %.0f  30d: %.0f",
+            mp_7d if not np.isnan(mp_7d) else -1,
+            mp_30d if not np.isnan(mp_30d) else -1,
         )
-        return pd.DataFrame({"BTC_options_max_pain": [mean_mp]}, index=index)
+        return pd.DataFrame(
+            {"BTC_options_max_pain": [mp_30d], "BTC_options_max_pain_7d": [mp_7d]},
+            index=index,
+        )
 
     # ------------------------------------------------------------------
 

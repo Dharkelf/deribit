@@ -81,17 +81,18 @@ def _make_api_response(n_strikes: int = 5) -> dict:
 
 
 @patch("src.collector.options_client.httpx.Client")
-def test_fetch_daily_snapshot_returns_dataframe(mock_cls: MagicMock) -> None:
+def test_fetch_daily_snapshot_returns_both_columns(mock_cls: MagicMock) -> None:
     mock_resp = MagicMock()
     mock_resp.json.return_value = _make_api_response(5)
     mock_resp.raise_for_status = MagicMock()
     mock_cls.return_value.get.return_value = mock_resp
 
-    client = DeribitOptionsClient(days_ahead=30)
+    client = DeribitOptionsClient(days_ahead=30, days_ahead_short=7)
     client._http = mock_cls.return_value
     result = client.fetch_daily_snapshot()
 
     assert "BTC_options_max_pain" in result.columns
+    assert "BTC_options_max_pain_7d" in result.columns
     assert len(result) == 1
     assert not result["BTC_options_max_pain"].isna().all()
 
@@ -100,16 +101,16 @@ def test_fetch_daily_snapshot_returns_dataframe(mock_cls: MagicMock) -> None:
 def test_fetch_daily_snapshot_nan_on_api_error(mock_cls: MagicMock) -> None:
     mock_cls.return_value.get.side_effect = Exception("timeout")
 
-    client = DeribitOptionsClient(days_ahead=30)
+    client = DeribitOptionsClient(days_ahead=30, days_ahead_short=7)
     client._http = mock_cls.return_value
     result = client.fetch_daily_snapshot()
 
     assert result["BTC_options_max_pain"].isna().all()
+    assert result["BTC_options_max_pain_7d"].isna().all()
 
 
 @patch("src.collector.options_client.httpx.Client")
 def test_fetch_daily_snapshot_nan_when_no_upcoming_expiries(mock_cls: MagicMock) -> None:
-    # Return options that expire in the past
     from datetime import timedelta
     past = datetime.now(tz=timezone.utc) - timedelta(days=60)
     exp_str = past.strftime("%d%b%y").upper()
@@ -120,8 +121,9 @@ def test_fetch_daily_snapshot_nan_when_no_upcoming_expiries(mock_cls: MagicMock)
     mock_resp.raise_for_status = MagicMock()
     mock_cls.return_value.get.return_value = mock_resp
 
-    client = DeribitOptionsClient(days_ahead=30)
+    client = DeribitOptionsClient(days_ahead=30, days_ahead_short=7)
     client._http = mock_cls.return_value
     result = client.fetch_daily_snapshot()
 
     assert result["BTC_options_max_pain"].isna().all()
+    assert result["BTC_options_max_pain_7d"].isna().all()

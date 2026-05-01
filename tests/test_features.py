@@ -130,11 +130,16 @@ def test_military_passthrough() -> None:
 
 
 def test_max_pain_diff_computed() -> None:
-    df = MaxPainExtractor().transform(_make_common_df())
+    rng = np.random.default_rng(0)
+    df = _make_common_df()
+    df["BTC_options_max_pain_7d"] = df["BTC_close"] * rng.uniform(0.9, 1.1, len(df))
+    df = MaxPainExtractor().transform(df)
     assert "max_pain_diff_usd" in df.columns
     assert "max_pain_diff_pct" in df.columns
-    # diff = max_pain - btc_close — should not all be zero
+    assert "max_pain_7d_diff_usd" in df.columns
+    assert "max_pain_7d_diff_pct" in df.columns
     assert not (df["max_pain_diff_usd"] == 0.0).all()
+    assert not (df["max_pain_7d_diff_usd"] == 0.0).all()
 
 
 def test_max_pain_nan_when_column_missing() -> None:
@@ -142,6 +147,8 @@ def test_max_pain_nan_when_column_missing() -> None:
     df = MaxPainExtractor().transform(df)
     assert df["max_pain_diff_usd"].isna().all()
     assert df["max_pain_diff_pct"].isna().all()
+    assert df["max_pain_7d_diff_usd"].isna().all()
+    assert df["max_pain_7d_diff_pct"].isna().all()
 
 
 def test_disaster_fills_zero_when_column_missing() -> None:

@@ -16,7 +16,8 @@ storage:
   raw_dir: data/raw           # Parquet output directory
 
 options:
-  max_pain_days_ahead: 30         # forward window for Max Pain mean (calendar days)
+  max_pain_days_ahead: 30         # long window for Max Pain mean (calendar days)
+  max_pain_days_ahead_short: 7    # short window for Max Pain mean (calendar days)
 
 hmm:
   n_components: [2, 3, 4]     # regime count search space

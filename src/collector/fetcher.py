@@ -98,14 +98,18 @@ def _fetch_gdelt(repo: ParquetRepository, history_days: int) -> None:
 
 def _fetch_options_max_pain(config: dict, repo: ParquetRepository) -> None:
     symbol = "BTC_OPTIONS_MAX_PAIN"
-    days_ahead: int = config.get("options", {}).get("max_pain_days_ahead", 30)
+    opts = config.get("options", {})
+    days_ahead: int       = opts.get("max_pain_days_ahead", 30)
+    days_ahead_short: int = opts.get("max_pain_days_ahead_short", 7)
     last = repo.last_timestamp(symbol)
     today = datetime.now(tz=timezone.utc).date()
     if last is not None and last.date() >= today:
         logger.info("Options max pain already up to date")
         return
-    logger.info("Fetching BTC options max pain (next %d days)", days_ahead)
-    with DeribitOptionsClient(days_ahead=days_ahead) as client:
+    logger.info(
+        "Fetching BTC options max pain (7d and %dd windows)", days_ahead
+    )
+    with DeribitOptionsClient(days_ahead=days_ahead, days_ahead_short=days_ahead_short) as client:
         df = client.fetch_daily_snapshot()
     repo.append(symbol, df)
     repo.save_sample(symbol)

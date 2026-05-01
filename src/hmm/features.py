@@ -92,6 +92,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
         ("FEMA", "FEMA_score"),
         ("GDELT", "GDELT_military_score"),
         ("BTC_OPTIONS_MAX_PAIN", "BTC_options_max_pain"),
+        ("BTC_OPTIONS_MAX_PAIN", "BTC_options_max_pain_7d"),
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
@@ -348,29 +349,36 @@ class MarketCloseExtractor(FeatureExtractor):
 
 
 class MaxPainExtractor(FeatureExtractor):
-    """BTC Options Max Pain feature — distance from current price to next-month pain level.
+    """BTC Options Max Pain features — distance from BTC price to pain level.
 
-    Mean max pain strike across all BTC option expiries in the next 30 days,
-    expressed as difference and percentage relative to the current BTC price.
+    Two windows computed in one daily Deribit API call:
+      30d window: mean max pain across all expiries in the next 30 days
+      7d  window: mean max pain across all expiries in the next 7 days
 
-    Interpretation: negative = max pain below current price (bearish gravitational pull),
-    positive = max pain above current price (bullish gravitational pull).
-    Values between data points are forward-filled (fetched daily, used hourly).
+    All four features express the gravitational pull as signed USD and
+    percentage distance from the current BTC close. Forward-filled hourly.
     """
 
     @property
     def feature_names(self) -> list[str]:
-        return ["max_pain_diff_usd", "max_pain_diff_pct"]
+        return [
+            "max_pain_diff_usd", "max_pain_diff_pct",
+            "max_pain_7d_diff_usd", "max_pain_7d_diff_pct",
+        ]
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        if "BTC_options_max_pain" not in df.columns:
-            df["max_pain_diff_usd"] = np.nan
-            df["max_pain_diff_pct"] = np.nan
-            return df
-        mp = df["BTC_options_max_pain"]
         btc = df["BTC_close"]
-        df["max_pain_diff_usd"] = mp - btc
-        df["max_pain_diff_pct"] = (mp - btc) / btc
+        for col, usd_out, pct_out in [
+            ("BTC_options_max_pain",    "max_pain_diff_usd",    "max_pain_diff_pct"),
+            ("BTC_options_max_pain_7d", "max_pain_7d_diff_usd", "max_pain_7d_diff_pct"),
+        ]:
+            if col not in df.columns:
+                df[usd_out] = np.nan
+                df[pct_out] = np.nan
+            else:
+                mp = df[col]
+                df[usd_out] = mp - btc
+                df[pct_out] = (mp - btc) / btc
         return df
 
 
