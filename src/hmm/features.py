@@ -232,13 +232,13 @@ class MomentumExtractor(FeatureExtractor):
 
 
 class BtcLagExtractor(FeatureExtractor):
-    """BTC log-diff return lagged by 24h, 48h, 72h and 168h.
+    """BTC log-diff return lagged by 1h, 2h, 3h, 6h, 12h, 18h and 24h.
 
-    Captures BTC's autocorrelation structure and delayed market reactions.
-    BTC tends to lead altcoins — lagged values improve SOL regime prediction.
+    Short-horizon lags capture the intraday BTC-leads-SOL effect.
+    Optuna selects the relevant subset during feature optimization.
     """
 
-    _LAGS = (24, 48, 72, 168)
+    _LAGS = (1, 2, 3, 6, 12, 18, 24)
 
     @property
     def feature_names(self) -> list[str]:

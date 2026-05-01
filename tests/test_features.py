@@ -89,8 +89,10 @@ def test_momentum_columns_added() -> None:
 
 def test_btc_lag_columns_added() -> None:
     df = BtcLagExtractor().transform(_make_common_df())
-    assert "BTC_log_return_lag_24h" in df.columns
-    assert "BTC_log_return_lag_168h" in df.columns
+    for h in (1, 2, 3, 6, 12, 18, 24):
+        assert f"BTC_log_return_lag_{h}h" in df.columns
+    for h in (48, 72, 168):
+        assert f"BTC_log_return_lag_{h}h" not in df.columns
 
 
 def test_btc_lag_24h_is_shifted() -> None:
@@ -98,6 +100,15 @@ def test_btc_lag_24h_is_shifted() -> None:
     df = BtcLagExtractor().transform(df)
     # lag_24h at row 25 == log_return at row 1
     assert df["BTC_log_return_lag_24h"].iloc[25] == pytest.approx(
+        df["BTC_log_return"].iloc[1]
+    )
+
+
+def test_btc_lag_1h_is_shifted() -> None:
+    df = LogDiffReturnExtractor().transform(_make_common_df())
+    df = BtcLagExtractor().transform(df)
+    # lag_1h at row 2 == log_return at row 1
+    assert df["BTC_log_return_lag_1h"].iloc[2] == pytest.approx(
         df["BTC_log_return"].iloc[1]
     )
 
