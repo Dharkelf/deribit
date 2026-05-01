@@ -2,10 +2,11 @@
 
 Queries GDELT for daily news article volume about US military operations.
 Score is normalized to [0, 1] via rolling 365-day max.
-Returns 0 on API failure (soft degradation — neutral signal, not a crash).
+Raises RuntimeError on API failure so the caller decides whether to persist.
 """
 
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.gdeltproject.org"
 _NORM_DAYS = 365
+_MAX_RETRIES = 3
+_RETRY_DELAY = 65  # seconds — GDELT rate-limits per minute
 
 # CAMEO-aligned keyword query for US military force projection
 _QUERY = (
@@ -40,17 +43,22 @@ class GdeltClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def fetch_daily_score(self, start: datetime, end: datetime) -> pd.DataFrame:
-        """Return daily US military activity score [0, 1] from *start* to *end*."""
+    def fetch_daily_score(self, start: datetime, end: datetime) -> pd.DataFrame | None:
+        """Return daily US military activity score [0, 1] from *start* to *end*.
+
+        Returns None on API failure so the caller can skip persisting stale zeros.
+        """
         date_index = pd.date_range(start.date(), end.date(), freq="D", tz="UTC")
         date_index.name = "timestamp"
 
         raw = self._fetch_timeline(start, end)
+        if raw is None:
+            logger.warning("GDELT fetch failed — returning None, caller must not persist")
+            return None
         if raw.empty:
-            logger.warning("GDELT returned no data — score set to 0")
+            logger.warning("GDELT returned empty timeline — score set to 0")
             return pd.DataFrame({"GDELT_military_score": 0.0}, index=date_index)
 
-        # reindex to full date range, fill missing days with 0
         raw = raw.reindex(date_index, fill_value=0.0)
         score = self._normalize(raw)
         logger.info("GDELT score: %d days, mean=%.3f", len(score), score.mean())
@@ -58,7 +66,7 @@ class GdeltClient:
 
     # ------------------------------------------------------------------
 
-    def _fetch_timeline(self, start: datetime, end: datetime) -> pd.Series:
+    def _fetch_timeline(self, start: datetime, end: datetime) -> pd.Series | None:
         params = {
             "query": _QUERY,
             "mode": "timelinevolraw",
@@ -66,13 +74,27 @@ class GdeltClient:
             "enddatetime": end.strftime("%Y%m%d%H%M%S"),
             "format": "json",
         }
-        try:
-            resp = self._http.get("/api/v2/doc/doc", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            logger.warning("GDELT API error: %s", exc)
-            return pd.Series(dtype=float)
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                resp = self._http.get("/api/v2/doc/doc", params=params)
+                if resp.status_code == 429:
+                    logger.warning(
+                        "GDELT 429 rate-limit (attempt %d/%d) — waiting %ds",
+                        attempt, _MAX_RETRIES, _RETRY_DELAY,
+                    )
+                    time.sleep(_RETRY_DELAY)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as exc:
+                logger.warning("GDELT API error: %s", exc)
+                return None
+        else:
+            logger.warning("GDELT gave 429 on all %d attempts", _MAX_RETRIES)
+            return None
 
         timeline = data.get("timeline", [{}])
         if not timeline or "data" not in timeline[0]:
@@ -80,7 +102,7 @@ class GdeltClient:
 
         rows = timeline[0]["data"]
         dates = pd.to_datetime(
-            [r["date"] for r in rows], format="%Y%m%d%H%M%S", utc=True
+            [r["date"] for r in rows], format="%Y%m%dT%H%M%SZ", utc=True
         )
         values = [float(r["value"]) for r in rows]
         series = pd.Series(values, index=dates, dtype=float)

@@ -20,7 +20,7 @@ def _make_gdelt_response(n_days: int = 10) -> dict:
             {
                 "data": [
                     {
-                        "date": (base + timedelta(days=i)).strftime("%Y%m%d%H%M%S"),
+                        "date": (base + timedelta(days=i)).strftime("%Y%m%dT%H%M%SZ"),
                         "value": float(100 + i * 10),
                     }
                     for i in range(n_days)
@@ -47,14 +47,14 @@ def test_fetch_daily_score_returns_dataframe(mock_cls: MagicMock) -> None:
 
 
 @patch("src.collector.gdelt_client.httpx.Client")
-def test_fetch_daily_score_zeros_on_api_error(mock_cls: MagicMock) -> None:
+def test_fetch_daily_score_returns_none_on_api_error(mock_cls: MagicMock) -> None:
     mock_cls.return_value.get.side_effect = Exception("connection refused")
 
     client = GdeltClient()
     client._http = mock_cls.return_value
     result = client.fetch_daily_score(_utc(2024, 3, 1), _utc(2024, 3, 7))
 
-    assert (result["GDELT_military_score"] == 0.0).all()
+    assert result is None
 
 
 @patch("src.collector.gdelt_client.httpx.Client")

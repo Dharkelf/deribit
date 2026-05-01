@@ -89,6 +89,9 @@ def _fetch_gdelt(repo: ParquetRepository, history_days: int) -> None:
     logger.info("Fetching GDELT military score from %s to %s", start.date(), end.date())
     with GdeltClient() as client:
         df = client.fetch_daily_score(start, end)
+    if df is None:
+        logger.warning("GDELT fetch failed — skipping persist to avoid overwriting with zeros")
+        return
     repo.append(symbol, df)
     repo.save_sample(symbol)
 
