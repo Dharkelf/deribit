@@ -65,7 +65,7 @@ VIX lags Deribit by one day; inner-join clips the most recent Deribit row.
 | All features including max pain | 0 rows (100% NaN → dropna kills all rows) |
 
 **Conclusion:** Max Pain features must be excluded until ≥7 days of daily collection have run.
-The optimizer will naturally avoid them (pruned trial if < n_components × 10 rows).
+The optimizer dynamically detects coverage (<50% non-NaN threshold) and excludes them automatically.
 
 ### FOMC decisions detected (0.10 pp threshold)
 
@@ -84,24 +84,71 @@ Daily noise (±0.01 pp) is correctly filtered by the 0.10 pp threshold.
 
 ---
 
-## HMM — smoke test (observed earlier session)
+## HMM Optimisation — first full run (2026-05-01)
 
-Model selection on 8 581 × 36 feature matrix (no max pain, before F&G/Fed were added):
+```
+python main.py hmm
+Runtime: 1.7 minutes (100 trials, 5 folds, 39 viable features)
+```
 
-| n_components | BIC |
+### Optuna study
+
+| Metric | Value |
 |---|---|
-| 2 | − |
-| 3 | − |
-| 4 | −700 396 (winner) |
+| Trials completed | 100 / 100 |
+| Trials pruned | 0 |
+| Features excluded (coverage <50%) | 4 (all max pain) |
+| Viable optional features | 39 |
+| Best objective (−mean CV LL/sample) | −88.71 |
+| Best n_components | 3 |
+| Best feature count | 33 (incl. SOL_log_return) |
 
-Regime frequencies (n=4):
-- Regime 0: 38.9%
-- Regime 1: 15.2%
-- Regime 2: 24.6%
-- Regime 3: 21.3%
+### Top 5 feature configs
 
-Convergence warnings from hmmlearn are expected and normal — they indicate the EM
-algorithm approached numerical precision near the optimum.
+| Rank | k | Features | Objective |
+|---|---|---|---|
+| 1 | 3 | 33 | −88.71 |
+| 2 | 3 | 32 | −86.64 |
+| 3 | 3 | 32 | −86.33 |
+| 4 | 3 | 31 | −84.39 |
+| 5 | 3 | 26 | −84.26 |
+
+All top-5 configs use k=3 regimes. Features consistently selected across top configs:
+- All log-returns (BTC, ETH, SOL, VIX)
+- All rolling volatilities (24h + 168h, all symbols)
+- SOL↔BTC/ETH correlations (24h + 168h)
+- BTC lags 2h–24h (1h lag consistently dropped)
+- Market close features (XETRA, NYSE, TSE)
+- FEMA score, Crypto Fear & Greed, `fed_rate_last_change`
+- `VIX_change_24h`, ETH + SOL momentum
+
+Features consistently NOT selected in top configs:
+- `BTC_log_return_lag_1h` (1h lag)
+- `VIX_zscore` (but `VIX_change_24h` selected)
+- `BTC_momentum`
+- `fed_rate` level (but signed change selected)
+
+### Final model fit (best config, full dataset)
+
+```
+Feature matrix:  8 581 rows × 33 cols
+n_components:    3
+BIC:             −2 055 153
+Log-likelihood:  1 035 683
+```
+
+### 7-day SOL/USD forecast
+
+```
+Last close:   $83.90  (2026-04-30)
+E[+7d]:       $83.15  (−0.9%)
+±2σ band:     [$67.42, $102.54]
+```
+
+The narrow expected return (−0.9%) reflects the HMM's current-regime view: the model
+places the last observation in a low-drift regime consistent with the SOL sideways
+consolidation visible since Feb 2026. The wide ±2σ band (±22%) reflects genuine
+regime uncertainty over a 168-step horizon.
 
 ---
 
