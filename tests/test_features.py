@@ -143,18 +143,76 @@ def test_disaster_fills_zero_when_column_missing() -> None:
 # ── MarketCloseExtractor ──────────────────────────────────────────────────────
 
 def test_market_close_nan_when_lib_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    import builtins
-    real_import = builtins.__import__
-
-    def mock_import(name: str, *args: object, **kwargs: object) -> object:
-        if name == "pandas_market_calendars":
-            raise ImportError("no module")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", mock_import)
+    import sys
+    monkeypatch.setitem(sys.modules, "pandas_market_calendars", None)  # type: ignore[arg-type]
     df = MarketCloseExtractor().transform(_make_common_df())
     assert "BTC_at_XETRA_close" in df.columns
     assert df["BTC_at_XETRA_close"].isna().all()
+
+
+def test_market_close_columns_non_nan_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MarketCloseExtractor produces non-NaN columns when mcal returns a valid schedule."""
+    import sys
+    from unittest.mock import MagicMock
+
+    n = 400
+    df = _make_common_df(n=n)
+
+    # Mock schedule: 10 daily closes within the DataFrame's date range
+    mock_schedule = pd.DataFrame({
+        "market_close": (
+            pd.date_range("2024-01-02 16:00", periods=10, freq="D", tz="UTC")
+            # Use microsecond resolution to simulate real mcal output
+            .astype("datetime64[us, UTC]")
+        ),
+    })
+    mock_cal = MagicMock()
+    mock_cal.schedule.return_value = mock_schedule
+
+    mock_mcal = MagicMock()
+    mock_mcal.get_calendar.return_value = mock_cal
+
+    monkeypatch.setitem(sys.modules, "pandas_market_calendars", mock_mcal)
+
+    result = MarketCloseExtractor().transform(df)
+
+    for ex in ("XETRA", "NYSE", "TSE"):
+        assert f"BTC_at_{ex}_close" in result.columns
+        assert f"BTC_return_since_{ex}_close" in result.columns
+        assert not result[f"BTC_at_{ex}_close"].isna().all(), (
+            f"BTC_at_{ex}_close is all-NaN"
+        )
+
+
+def test_market_close_uses_correct_calendar_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exchange labels map to the correct mcal calendar identifiers."""
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_schedule = pd.DataFrame({
+        "market_close": (
+            pd.date_range("2024-01-02 16:00", periods=5, freq="D", tz="UTC")
+            .astype("datetime64[us, UTC]")
+        ),
+    })
+    mock_cal = MagicMock()
+    mock_cal.schedule.return_value = mock_schedule
+
+    mock_mcal = MagicMock()
+    mock_mcal.get_calendar.return_value = mock_cal
+
+    monkeypatch.setitem(sys.modules, "pandas_market_calendars", mock_mcal)
+
+    MarketCloseExtractor().transform(_make_common_df())
+
+    called_names = {call.args[0] for call in mock_mcal.get_calendar.call_args_list}
+    assert "XETR" in called_names,  "XETRA should map to mcal key 'XETR'"
+    assert "NYSE" in called_names
+    assert "XTKS" in called_names, "TSE should map to mcal key 'XTKS'"
 
 
 # ── build_feature_matrix ──────────────────────────────────────────────────────

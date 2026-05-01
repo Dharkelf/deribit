@@ -263,9 +263,9 @@ class MarketCloseExtractor(FeatureExtractor):
     """
 
     _EXCHANGES: dict[str, str] = {
-        "XETRA": "XETRA",
+        "XETRA": "XETR",   # mcal MIC code for Frankfurt/XETRA
         "NYSE": "NYSE",
-        "TSE": "TSE",
+        "TSE": "XTKS",     # mcal MIC code for Tokyo Stock Exchange
     }
 
     @property
@@ -301,29 +301,38 @@ class MarketCloseExtractor(FeatureExtractor):
                 schedule = cal.schedule(
                     start_date=start.date(), end_date=end.date()
                 )
-                close_times: pd.Series = schedule["market_close"]
+                if schedule.empty:
+                    raise ValueError(f"empty schedule for {cal_name}")
 
-                # BTC price at each session close (asof = last known value)
+                # Normalise to the same datetime resolution/tz as df.index
+                # so merge_asof gets compatible keys regardless of what mcal
+                # returns (us, ms, ns — with or without tz attached to .values).
+                close_times: pd.DatetimeIndex = (
+                    pd.DatetimeIndex(schedule["market_close"])
+                    .tz_convert("UTC")
+                    .astype(df.index.dtype)
+                )
+
                 btc_at_closes = pd.Series(
                     [btc.asof(t) for t in close_times],
                     index=close_times,
                     dtype=float,
                 )
 
-                # merge_asof: for each timestamp assign the most recent close
+                # Keep close_times as a DatetimeIndex column (not .values) so
+                # the timezone is preserved in the ref DataFrame for merge_asof.
                 ref = pd.DataFrame(
-                    {"close_time": close_times.values,
+                    {"close_time": close_times,
                      "btc_close_price": btc_at_closes.values}
                 )
-                main = df[[]].reset_index()  # just the timestamp index
+                main = df[[]].reset_index()
                 merged = pd.merge_asof(
                     main,
                     ref,
                     left_on="timestamp",
                     right_on="close_time",
                     direction="backward",
-                )
-                merged = merged.set_index("timestamp")
+                ).set_index("timestamp")
 
                 btc_close_ref = merged["btc_close_price"]
                 df[f"BTC_at_{label}_close"] = np.log(btc_close_ref)

@@ -177,7 +177,6 @@ Rules:
 | HMM modelling | `hmmlearn` |
 | Bayesian optimization | `optuna` |
 | Cross-validation | `scikit-learn` |
-| Scheduling | `APScheduler` |
 | Storage | `pyarrow`, `pandas` |
 | VIX data | `yfinance` |
 | HTTP client | `httpx` |
