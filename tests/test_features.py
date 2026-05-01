@@ -7,7 +7,9 @@ import pytest
 from src.hmm.features import (
     ALL_FEATURE_NAMES,
     BtcLagExtractor,
+    CryptoFearGreedExtractor,
     DisasterExtractor,
+    FedRateExtractor,
     LogDiffReturnExtractor,
     MarketCloseExtractor,
     MaxPainExtractor,
@@ -15,13 +17,19 @@ from src.hmm.features import (
     MomentumExtractor,
     RollingCorrelationExtractor,
     RollingVolatilityExtractor,
+    StockFearGreedExtractor,
     VixLevelExtractor,
     build_feature_matrix,
     load_common_dataframe,
 )
 
 
-def _make_common_df(n: int = 400, with_max_pain: bool = True) -> pd.DataFrame:
+def _make_common_df(
+    n: int = 400,
+    with_max_pain: bool = True,
+    with_sentiment: bool = True,
+    with_fed: bool = True,
+) -> pd.DataFrame:
     """Minimal common DataFrame with all required symbol + soft-signal columns."""
     index = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
     index.name = "timestamp"
@@ -37,6 +45,12 @@ def _make_common_df(n: int = 400, with_max_pain: bool = True) -> pd.DataFrame:
     df["GDELT_military_score"] = rng.uniform(0, 1, n)
     if with_max_pain:
         df["BTC_options_max_pain"] = df["BTC_close"] * rng.uniform(0.8, 1.2, n)
+    if with_sentiment:
+        df["crypto_fear_greed"] = rng.uniform(0, 1, n)
+        df["stock_fear_greed"] = rng.uniform(0, 1, n)
+    if with_fed:
+        df["fed_rate"] = 4.33
+        df["fed_rate_last_change"] = -0.25
     return df
 
 
@@ -265,3 +279,64 @@ def test_load_common_dataframe_raises_without_files(tmp_path: object) -> None:
     config = {"storage": {"raw_dir": str(tmp_path)}}
     with pytest.raises(FileNotFoundError):
         load_common_dataframe(config)
+
+
+# ── CryptoFearGreedExtractor ──────────────────────────────────────────────────
+
+def test_crypto_fear_greed_passthrough() -> None:
+    df = _make_common_df()
+    original = df["crypto_fear_greed"].copy()
+    df = CryptoFearGreedExtractor().transform(df)
+    pd.testing.assert_series_equal(df["crypto_fear_greed"], original)
+
+
+def test_crypto_fear_greed_nan_when_column_missing() -> None:
+    df = _make_common_df(with_sentiment=False)
+    df = CryptoFearGreedExtractor().transform(df)
+    assert "crypto_fear_greed" in df.columns
+    assert df["crypto_fear_greed"].isna().all()
+
+
+# ── StockFearGreedExtractor ───────────────────────────────────────────────────
+
+def test_stock_fear_greed_passthrough() -> None:
+    df = _make_common_df()
+    original = df["stock_fear_greed"].copy()
+    df = StockFearGreedExtractor().transform(df)
+    pd.testing.assert_series_equal(df["stock_fear_greed"], original)
+
+
+def test_stock_fear_greed_nan_when_column_missing() -> None:
+    df = _make_common_df(with_sentiment=False)
+    df = StockFearGreedExtractor().transform(df)
+    assert "stock_fear_greed" in df.columns
+    assert df["stock_fear_greed"].isna().all()
+
+
+# ── FedRateExtractor ──────────────────────────────────────────────────────────
+
+def test_fed_rate_passthrough() -> None:
+    df = _make_common_df()
+    df = FedRateExtractor().transform(df)
+    assert "fed_rate" in df.columns
+    assert "fed_rate_last_change" in df.columns
+    assert (df["fed_rate"] == 4.33).all()
+    assert (df["fed_rate_last_change"] == -0.25).all()
+
+
+def test_fed_rate_nan_when_column_missing() -> None:
+    df = _make_common_df(with_fed=False)
+    df = FedRateExtractor().transform(df)
+    assert df["fed_rate"].isna().all()
+    assert df["fed_rate_last_change"].isna().all()
+
+
+def test_new_sentiment_features_in_build_matrix() -> None:
+    """Sentiment and Fed features flow through build_feature_matrix without error."""
+    matrix = build_feature_matrix(
+        _make_common_df(),
+        ["crypto_fear_greed", "stock_fear_greed", "fed_rate", "fed_rate_last_change"],
+    )
+    for col in ("crypto_fear_greed", "stock_fear_greed", "fed_rate", "fed_rate_last_change"):
+        assert col in matrix.columns
+    assert not matrix.isnull().any().any()

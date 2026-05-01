@@ -1,4 +1,4 @@
-"""1-month forward SOL price forecast.
+"""1-week forward SOL price forecast (168 hourly steps).
 
 Design
 ------
@@ -13,7 +13,7 @@ Template Method: run() is the fixed pipeline skeleton —
 Forecast maths
 --------------
   π₀  = posterior state distribution at last observed timestamp (forward_proba[-1])
-  πⱼ  = π₀ · Aʲ                     (j = 1, …, k  where k = 30*24 = 720)
+  πⱼ  = π₀ · Aʲ                     (j = 1, …, k  where k = 7*24 = 168)
   μ_j = Σᵢ πⱼ[i] · mean_i[sol_idx]  (expected log-return at step j)
   σ²_j= Σᵢ πⱼ[i] · (mean_i² + diag_cov_i)[sol_idx] − μ_j²
   cum_lr(k) = Σⱼ₌₁ᵏ μ_j             (cumulative expected log-return)
@@ -161,7 +161,7 @@ def _shade_regimes(
 
 def run(config: dict) -> None:
     """Full pipeline: optimise → fit → forecast → plot."""
-    logger.info("=== HMM predict: 1-month SOL forecast ===")
+    logger.info("=== HMM predict: 1-week SOL forecast ===")
 
     # 1. Optimise (cached)
     study = run_optimization(config)
@@ -240,7 +240,7 @@ def _plot_forecast(
 
     # Forecast
     ax.plot(future_ts, exp_price, color="#f39c12", linewidth=2.0,
-            linestyle="--", label="Expected SOL (+30d)")
+            linestyle="--", label="Expected SOL (+7d)")
     ax.fill_between(future_ts, lo_price, hi_price, color="#f39c12", alpha=0.18,
                     label="±2σ confidence")
 
