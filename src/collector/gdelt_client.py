@@ -13,7 +13,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.gdelt.org"
+_BASE_URL = "https://api.gdeltproject.org"
 _NORM_DAYS = 365
 
 # CAMEO-aligned keyword query for US military force projection
@@ -67,7 +67,7 @@ class GdeltClient:
             "format": "json",
         }
         try:
-            resp = self._http.get("/v2/doc/doc", params=params)
+            resp = self._http.get("/api/v2/doc/doc", params=params)
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
