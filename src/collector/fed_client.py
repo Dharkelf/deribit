@@ -40,8 +40,8 @@ def fetch_fed_rate() -> pd.DataFrame | None:
         resp.raise_for_status()
         df = pd.read_csv(
             StringIO(resp.text),
-            parse_dates=["DATE"],
-            index_col="DATE",
+            parse_dates=["observation_date"],
+            index_col="observation_date",
             na_values=[".", ""],
         )
     except Exception as e:
@@ -57,11 +57,11 @@ def fetch_fed_rate() -> pd.DataFrame | None:
         logger.warning("Fed rate: empty DataFrame after parsing")
         return None
 
-    # Daily change; non-zero entries mark FOMC decisions.
-    # Forward-fill so every row carries the signed value of the last decision.
+    # FOMC decisions are always ≥ 0.25 pp; effective DFF fluctuates ±0.01 as noise.
+    # Only mark genuine policy moves (threshold: 0.10 pp) as last_change.
     daily_change = df["fed_rate"].diff()
-    nonzero_changes = daily_change.where(daily_change != 0.0)
-    df["fed_rate_last_change"] = nonzero_changes.ffill().fillna(0.0)
+    fomc_changes = daily_change.where(daily_change.abs() >= 0.10)
+    df["fed_rate_last_change"] = fomc_changes.ffill().fillna(0.0)
 
     logger.info(
         "Fed rate: %d daily rows | current=%.4f%%  last_change=%+.4f%%",
