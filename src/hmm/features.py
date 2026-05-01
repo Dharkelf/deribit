@@ -88,11 +88,10 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     combined = combined.reindex(full_index).ffill()
 
     # --- Soft signals (optional) ---
+    # FEMA/GDELT: 0 = neutral/no activity — safe fallback
     for symbol, col in [
         ("FEMA", "FEMA_score"),
         ("GDELT", "GDELT_military_score"),
-        ("BTC_OPTIONS_MAX_PAIN", "BTC_options_max_pain"),
-        ("BTC_OPTIONS_MAX_PAIN", "BTC_options_max_pain_7d"),
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
@@ -101,6 +100,19 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
         else:
             logger.warning("%s.parquet not found — filling %s with 0", symbol, col)
             s = pd.Series(0.0, index=full_index, name=col)
+        combined[col] = s
+
+    # Max Pain: 0 is meaningless (would imply price = 100% above pain level).
+    # Use NaN so build_feature_matrix drops affected rows rather than
+    # propagating a nonsensical −1.0 percentage signal.
+    for col in ("BTC_options_max_pain", "BTC_options_max_pain_7d"):
+        path = rd / "BTC_OPTIONS_MAX_PAIN.parquet"
+        if path.exists() and col in pd.read_parquet(path).columns:
+            s = pd.read_parquet(path)[col]
+            s = s.reindex(full_index).ffill()  # NaN where no history yet
+        else:
+            logger.warning("BTC_OPTIONS_MAX_PAIN.parquet missing col %s — filling NaN", col)
+            s = pd.Series(np.nan, index=full_index, name=col)
         combined[col] = s
 
     combined.index.name = "timestamp"

@@ -45,14 +45,16 @@ def main() -> None:
     raw = _raw_dir()
 
     panels: list[tuple[str, pd.Series, str]] = [
-        ("BTC close (USD)",        _load(raw, "BTC",  "close"),                  "#f7931a"),
-        ("ETH close (USD)",        _load(raw, "ETH",  "close"),                  "#627eea"),
-        ("SOL close (USD)",        _load(raw, "SOL",  "close"),                  "#9945ff"),
-        ("VIX",                    _load(raw, "VIX",  "close"),                  "#e74c3c"),
-        ("BTC Options Max Pain",   _load(raw, "BTC_OPTIONS_MAX_PAIN",
-                                         "BTC_options_max_pain"),                "#f39c12"),
-        ("FEMA Disaster Score",    _load(raw, "FEMA",  "FEMA_score"),            "#2ecc71"),
-        ("GDELT Military Score",   _load(raw, "GDELT", "GDELT_military_score"),  "#e67e22"),
+        ("BTC close (USD)",              _load(raw, "BTC",  "close"),                       "#f7931a"),
+        ("ETH close (USD)",              _load(raw, "ETH",  "close"),                       "#627eea"),
+        ("SOL close (USD)",              _load(raw, "SOL",  "close"),                       "#9945ff"),
+        ("VIX",                          _load(raw, "VIX",  "close"),                       "#e74c3c"),
+        ("BTC Max Pain 30d (USD)",       _load(raw, "BTC_OPTIONS_MAX_PAIN",
+                                               "BTC_options_max_pain"),                     "#f39c12"),
+        ("BTC Max Pain 7d (USD)",        _load(raw, "BTC_OPTIONS_MAX_PAIN",
+                                               "BTC_options_max_pain_7d"),                  "#e67e22"),
+        ("FEMA Disaster Score",          _load(raw, "FEMA",  "FEMA_score"),                 "#2ecc71"),
+        ("GDELT Military Score",         _load(raw, "GDELT", "GDELT_military_score"),        "#3498db"),
     ]
 
     n = len(panels)
