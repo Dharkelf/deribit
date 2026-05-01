@@ -6,8 +6,19 @@ Template Method: run_optimization() is the fixed algorithm skeleton.
 Optuna TPESampler explores the binary feature-inclusion hyperspace plus
 n_components; TimeSeriesSplit provides walk-forward CV.
 
-Objective: minimise negative mean CV log-likelihood per sample.
-Lower objective = better model (Optuna minimises by default).
+Objective (composite selection score, higher = better regime structure):
+  score = 3.0·avg_self_transition
+        + 1.5·min_state_fraction
+        − 0.25·median_run_days          (run length in days = hours/24)
+        − 2.5·avg_entropy
+        + 0.05·loglik_per_obs_per_feat
+
+  Eligibility: model is only scored when min_state_fraction ≥ 0.05 in every
+  accepted fold — models that collapse a state are pruned.
+
+  Optuna minimises the NEGATIVE mean score (→ maximises the score).
+
+  Ref: blueprint from course notes (adapted for hourly data — run_length/24).
 
 Study caching: fitted Optuna study persisted as pickle next to model artefacts.
 top_n_results() extracts the N best *distinct* feature-set + n_components combos.
@@ -24,7 +35,7 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 
 from src.hmm.features import ALL_EXTRACTORS, ALL_FEATURE_NAMES, build_feature_matrix, load_common_dataframe
-from src.hmm.model import build_model
+from src.hmm.model import GaussianHMMModel, build_model
 from src.utils.paths import models_dir
 
 logger = logging.getLogger(__name__)
@@ -35,6 +46,9 @@ _STUDY_FILENAME = "optuna_study.pkl"
 
 # SOL_log_return is always included — never toggled by Optuna
 _OPTIONAL_FEATURES: list[str] = [f for f in ALL_FEATURE_NAMES if f != "SOL_log_return"]
+
+# Minimum fraction each state must occupy to be considered a valid model
+_MIN_STATE_FRACTION = 0.05
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +75,88 @@ def load_study(config: dict) -> optuna.Study | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Objective
+# Selection-score helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _median_run_length(labels: np.ndarray) -> float:
+    """Median length (in steps) of contiguous same-regime blocks."""
+    if len(labels) == 0:
+        return 0.0
+    runs: list[int] = []
+    count = 1
+    for i in range(1, len(labels)):
+        if labels[i] == labels[i - 1]:
+            count += 1
+        else:
+            runs.append(count)
+            count = 1
+    runs.append(count)
+    return float(np.median(runs))
+
+
+def _selection_score(
+    model: GaussianHMMModel,
+    X_train: np.ndarray,
+) -> float | None:
+    """Compute the composite regime-quality score on the training fold.
+
+    Returns None when the model is ineligible (a state occupies < 5% of
+    training observations).
+
+    Score components
+    ----------------
+    avg_self_transition  : mean diagonal of the transition matrix — rewards
+                           stable, persistent regimes.
+    min_state_fraction   : fraction of the rarest state — penalises degenerate
+                           models where a regime is nearly unused.
+    median_run_days      : median contiguous-block length in days (hours/24) —
+                           mild penalty for excessively short or erratic runs.
+    avg_entropy          : mean posterior entropy per step — penalises uncertain
+                           regime assignments (lower entropy = crisper regimes).
+    loglik_per_obs_feat  : train log-likelihood / (T·d) — rewards fit quality.
+
+    Weights from blueprint (adapted: run_length divided by 24 for hourly data):
+      score = 3.0·avg_self_transition + 1.5·min_state_fraction
+            − 0.25·median_run_days − 2.5·avg_entropy
+            + 0.05·loglik_per_obs_feat
+    """
+    k = model.n_components
+    labels = model.predict(X_train)
+
+    # ── State fractions ────────────────────────────────────────────────────
+    fractions = np.array([(labels == r).mean() for r in range(k)])
+    min_state_fraction = float(fractions.min())
+    if min_state_fraction < _MIN_STATE_FRACTION:
+        return None                              # ineligible
+
+    # ── avg self-transition ────────────────────────────────────────────────
+    avg_self_transition = float(np.diag(model._model.transmat_).mean())
+
+    # ── median run length (hours → days) ──────────────────────────────────
+    median_run_days = _median_run_length(labels) / 24.0
+
+    # ── average posterior entropy ──────────────────────────────────────────
+    proba = model.predict_proba(X_train)                 # (T, k)
+    entropy = -np.sum(proba * np.log(proba + 1e-9), axis=1)
+    avg_entropy = float(entropy.mean())
+
+    # ── normalised log-likelihood ──────────────────────────────────────────
+    T, d = X_train.shape
+    loglik_per_obs_feat = model.score(X_train) / (T * d)
+
+    score = (
+        3.00 * avg_self_transition
+        + 1.50 * min_state_fraction
+        - 0.25 * median_run_days
+        - 2.50 * avg_entropy
+        + 0.05 * loglik_per_obs_feat
+    )
+    return float(score)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature coverage filter
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -89,6 +184,11 @@ def _viable_optional_features(df_common: pd.DataFrame) -> list[str]:
     return viable
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Objective
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _build_objective(
     config: dict,
     df_common: pd.DataFrame,
@@ -99,18 +199,16 @@ def _build_objective(
     n_splits: int = hmm_cfg.get("n_splits", 5)
     tscv = TimeSeriesSplit(n_splits=n_splits)
 
-    # Compute once — exclude features without sufficient data
     viable = _viable_optional_features(df_common)
     logger.info("Optimizer: %d viable optional features", len(viable))
 
     def objective(trial: optuna.Trial) -> float:
-        # --- Hyperparameters ---
+        # ── Hyperparameters ────────────────────────────────────────────────
         n_components: int = trial.suggest_categorical(
             "n_components", n_components_choices
         )
         feature_subset: list[str] = [
-            f
-            for f in viable
+            f for f in viable
             if trial.suggest_categorical(f"use_{f}", [True, False])
         ]
 
@@ -123,22 +221,19 @@ def _build_objective(
         if len(X_full) < n_components * 20:
             raise optuna.exceptions.TrialPruned()
 
-        # --- Walk-forward CV ---
+        # ── Walk-forward CV (score on training folds) ──────────────────────
         scores: list[float] = []
-        for train_idx, val_idx in tscv.split(X_full):
+        for train_idx, _ in tscv.split(X_full):
             X_train = X_full.iloc[train_idx].values
-            X_val = X_full.iloc[val_idx].values
-
-            if len(X_train) < n_components * 10 or len(X_val) < 1:
+            if len(X_train) < n_components * 10:
                 continue
 
             try:
                 model = build_model(config, n_components=n_components)
                 model.fit(X_train)
-                ll_per_sample = model.score(X_val) / len(X_val)
-                # Discard degenerate fits (covariance collapse, near-singular matrix)
-                if np.isfinite(ll_per_sample) and ll_per_sample > -1e4:
-                    scores.append(ll_per_sample)
+                s = _selection_score(model, X_train)
+                if s is not None:
+                    scores.append(s)
             except Exception as e:
                 logger.debug("CV fold failed (k=%d): %s", n_components, e)
                 continue
@@ -146,7 +241,7 @@ def _build_objective(
         if not scores:
             raise optuna.exceptions.TrialPruned()
 
-        return -float(np.mean(scores))  # minimise negative LL
+        return -float(np.mean(scores))      # Optuna minimises → maximise score
 
     return objective
 
@@ -185,8 +280,8 @@ def run_optimization(
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     logger.info(
-        "Best trial: objective=%.4f  n_components=%d  n_features=%d",
-        study.best_trial.value,
+        "Best trial: score=%.4f  n_components=%d  n_features=%d",
+        -study.best_trial.value,
         study.best_trial.params["n_components"],
         sum(1 for k, v in study.best_trial.params.items() if k.startswith("use_") and v),
     )
@@ -211,9 +306,10 @@ def top_n_results(
     """Return the N best completed trials as structured dicts.
 
     Each dict has:
-      n_components : int
+      n_components  : int
       feature_subset: list[str]   # optional features (SOL_log_return excluded)
-      objective     : float        # negative mean CV LL (lower = better)
+      objective     : float        # Optuna objective (negative score, lower = better)
+      score         : float        # selection score (higher = better)
       trial_number  : int
     """
     completed = [
@@ -233,10 +329,11 @@ def top_n_results(
         seen.add(key)
         results.append(
             {
-                "n_components": k,
+                "n_components":  k,
                 "feature_subset": subset,
-                "objective": trial.value,
-                "trial_number": trial.number,
+                "objective":     trial.value,
+                "score":         -trial.value,   # higher = better
+                "trial_number":  trial.number,
             }
         )
         if len(results) >= n:
