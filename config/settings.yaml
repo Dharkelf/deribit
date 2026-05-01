@@ -14,6 +14,7 @@ collector:
 
 storage:
   raw_dir: data/raw           # Parquet output directory
+  models_dir: data/processed/models  # fitted model artefacts
 
 options:
   max_pain_days_ahead: 30         # long window for Max Pain mean (calendar days)
@@ -23,6 +24,9 @@ hmm:
   n_components: [2, 3, 4]     # regime count search space
   n_splits: 5                 # TimeSeriesSplit folds
   n_trials: 100               # Optuna trials
+  random_state: 42            # seed for GaussianHMM and Optuna TPESampler
+  covariance_type: full       # hmmlearn covariance type (full/diag/tied/spherical)
+  n_iter: 200                 # max EM iterations per fit
 
 logging:
   level: INFO

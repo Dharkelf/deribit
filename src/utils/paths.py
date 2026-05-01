@@ -13,5 +13,11 @@ def raw_dir(config: dict) -> Path:
     return path
 
 
+def models_dir(config: dict) -> Path:
+    path = project_root() / config["storage"]["models_dir"]
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def symbol_parquet(config: dict, symbol: str) -> Path:
     return raw_dir(config) / f"{symbol}.parquet"
