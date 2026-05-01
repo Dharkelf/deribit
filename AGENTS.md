@@ -235,6 +235,35 @@ A
 
 ---
 
+## REPORT.md — Behaviour Log
+
+`REPORT.md` documents **actual observed runtime behaviour** — what the code does when run,
+not what it is supposed to do. It complements `README.md` (design intent) with empirical evidence.
+
+Maintain one `REPORT.md` per project. Commit it alongside code changes.
+
+### Required Sections
+
+| Section | Content |
+|---|---|
+| **Data Collection** | Actual row counts, date ranges, file sizes, any gaps observed |
+| **Feature Matrix** | Shape after `build_feature_matrix()`, NaN rates per feature, value ranges |
+| **Model Results** | HMM n_components chosen, log-likelihood, BIC, regime labels and their frequencies |
+| **Optimizer** | Best feature subset found, Optuna trial count, cross-validation scores |
+| **Known Issues** | Observed anomalies, API failures, data quirks not yet fixed |
+
+### Consistency Rule — enforced on every essential code change
+
+On every change that affects data flow, feature logic, model behaviour or CLI output:
+
+1. **Run the affected code** and observe actual output.
+2. **Compare** `README.md` and `REPORT.md` against the observed behaviour.
+3. **Fix all inconsistencies** in `README.md` and `REPORT.md` in the **same commit** as the code change.
+
+A commit that changes behaviour without updating both documents is incomplete.
+
+---
+
 ## Git Rules
 
 - `README.md` is always committed — it is the project wiki.
