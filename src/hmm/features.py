@@ -22,10 +22,13 @@ Available feature groups
   RollingCorrelationExtractor— rolling Pearson correlation SOL↔BTC/ETH
   VixLevelExtractor          — VIX z-score + 24h change
   MomentumExtractor          — short/long MA ratio (BTC, ETH, SOL)
-  BtcLagExtractor            — BTC log-diff return lagged 24h/48h/72h/168h
+  BtcLagExtractor            — BTC log-diff return lagged 1h/2h/3h/6h/12h/18h/24h
   MarketCloseExtractor       — BTC price at XETRA / NYSE / TSE session close
   DisasterExtractor          — FEMA disaster severity score [0, 1]
   MilitaryExtractor          — GDELT US military activity score [0, 1]
+  CryptoFearGreedExtractor   — Crypto Fear & Greed Index [0, 1]
+  StockFearGreedExtractor    — Stock Fear & Greed Index CNN [0, 1]
+  FedRateExtractor           — Fed Funds Rate (%) + signed last FOMC change
 """
 
 import logging
@@ -100,6 +103,34 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
         else:
             logger.warning("%s.parquet not found — filling %s with 0", symbol, col)
             s = pd.Series(0.0, index=full_index, name=col)
+        combined[col] = s
+
+    # Fear & Greed indices: 0 = extreme fear — not a neutral fallback.
+    # Use NaN when data is missing so dropna() removes affected rows rather
+    # than injecting a biased signal.
+    for symbol, col in [
+        ("CRYPTO_FEAR_GREED", "crypto_fear_greed"),
+        ("STOCK_FEAR_GREED",  "stock_fear_greed"),
+    ]:
+        path = rd / f"{symbol}.parquet"
+        if path.exists():
+            s = pd.read_parquet(path)[col]
+            s = s.reindex(full_index).ffill()
+        else:
+            logger.warning("%s.parquet not found — filling %s with NaN", symbol, col)
+            s = pd.Series(np.nan, index=full_index, name=col)
+        combined[col] = s
+
+    # Fed rate: 0 is factually wrong (current rate ~4-5%).
+    # Use NaN when data is missing.
+    fed_path = rd / "FED_RATE.parquet"
+    for col in ("fed_rate", "fed_rate_last_change"):
+        if fed_path.exists() and col in pd.read_parquet(fed_path).columns:
+            s = pd.read_parquet(fed_path)[col]
+            s = s.reindex(full_index).ffill()
+        else:
+            logger.warning("FED_RATE.parquet missing col %s — filling NaN", col)
+            s = pd.Series(np.nan, index=full_index, name=col)
         combined[col] = s
 
     # Max Pain: 0 is meaningless (would imply price = 100% above pain level).
@@ -430,6 +461,61 @@ class MilitaryExtractor(FeatureExtractor):
         return df
 
 
+class CryptoFearGreedExtractor(FeatureExtractor):
+    """Crypto Fear & Greed Index [0, 1] — daily, forward-filled to hourly.
+
+    0 = extreme fear, 1 = extreme greed.
+    Source: alternative.me. NaN when not yet collected.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["crypto_fear_greed"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "crypto_fear_greed" not in df.columns:
+            df["crypto_fear_greed"] = np.nan
+        return df
+
+
+class StockFearGreedExtractor(FeatureExtractor):
+    """CNN Stock Fear & Greed Index [0, 1] — daily, forward-filled to hourly.
+
+    0 = extreme fear, 1 = extreme greed.
+    Source: CNN dataviz. NaN when not yet collected.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["stock_fear_greed"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "stock_fear_greed" not in df.columns:
+            df["stock_fear_greed"] = np.nan
+        return df
+
+
+class FedRateExtractor(FeatureExtractor):
+    """US Federal Funds Rate features — daily FRED DFF, forward-filled to hourly.
+
+    fed_rate             — effective rate in percent (e.g. 4.33)
+    fed_rate_last_change — signed value of last FOMC decision (e.g. −0.25 after cut)
+                           forward-filled between decisions so the signal is always
+                           current without knowing meeting dates in advance.
+    NaN when not yet collected.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["fed_rate", "fed_rate_last_change"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        for col in self.feature_names:
+            if col not in df.columns:
+                df[col] = np.nan
+        return df
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry and builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,6 +531,9 @@ ALL_EXTRACTORS: list[FeatureExtractor] = [
     MaxPainExtractor(),
     DisasterExtractor(),
     MilitaryExtractor(),
+    CryptoFearGreedExtractor(),
+    StockFearGreedExtractor(),
+    FedRateExtractor(),
 ]
 
 ALL_FEATURE_NAMES: list[str] = [

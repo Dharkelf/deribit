@@ -45,21 +45,27 @@ def main() -> None:
     raw = _raw_dir()
 
     panels: list[tuple[str, pd.Series, str]] = [
-        ("BTC close (USD)",              _load(raw, "BTC",  "close"),                       "#f7931a"),
-        ("ETH close (USD)",              _load(raw, "ETH",  "close"),                       "#627eea"),
-        ("SOL close (USD)",              _load(raw, "SOL",  "close"),                       "#9945ff"),
-        ("VIX",                          _load(raw, "VIX",  "close"),                       "#e74c3c"),
+        ("BTC close (USD)",              _load(raw, "BTC",  "close"),                          "#f7931a"),
+        ("ETH close (USD)",              _load(raw, "ETH",  "close"),                          "#627eea"),
+        ("SOL close (USD)",              _load(raw, "SOL",  "close"),                          "#9945ff"),
+        ("VIX",                          _load(raw, "VIX",  "close"),                          "#e74c3c"),
         ("BTC Max Pain 30d (USD)",       _load(raw, "BTC_OPTIONS_MAX_PAIN",
-                                               "BTC_options_max_pain"),                     "#f39c12"),
+                                               "BTC_options_max_pain"),                        "#f39c12"),
         ("BTC Max Pain 7d (USD)",        _load(raw, "BTC_OPTIONS_MAX_PAIN",
-                                               "BTC_options_max_pain_7d"),                  "#e67e22"),
-        ("FEMA Disaster Score",          _load(raw, "FEMA",  "FEMA_score"),                 "#2ecc71"),
-        ("GDELT Military Score",         _load(raw, "GDELT", "GDELT_military_score"),        "#3498db"),
+                                               "BTC_options_max_pain_7d"),                     "#e67e22"),
+        ("FEMA Disaster Score",          _load(raw, "FEMA",  "FEMA_score"),                    "#2ecc71"),
+        ("GDELT Military Score",         _load(raw, "GDELT", "GDELT_military_score"),           "#3498db"),
+        ("Crypto Fear & Greed [0–1]",    _load(raw, "CRYPTO_FEAR_GREED",
+                                               "crypto_fear_greed"),                           "#f1c40f"),
+        ("Stock Fear & Greed [0–1]",     _load(raw, "STOCK_FEAR_GREED",
+                                               "stock_fear_greed"),                            "#e67e22"),
+        ("Fed Funds Rate (%)",           _load(raw, "FED_RATE", "fed_rate"),                   "#1abc9c"),
+        ("Fed Rate Last Change (%)",     _load(raw, "FED_RATE", "fed_rate_last_change"),        "#16a085"),
     ]
 
     n = len(panels)
     fig, axes = plt.subplots(n, 1, figsize=(14, 3 * n), sharex=False)
-    fig.suptitle("Deribit — Collected Data (last 365 days)", fontsize=13, y=1.002)
+    fig.suptitle("Deribit — Collected Data (last 365 days)", fontsize=13, y=1.001)
 
     for ax, (title, series, color) in zip(axes, panels):
         if series.empty:

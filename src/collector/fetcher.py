@@ -8,6 +8,9 @@ Sources:
   - yfinance          → VIX (daily → forward-filled hourly)
   - FEMA OpenFEMA     → US disaster severity score (daily)
   - GDELT DOC 2.0     → US military activity score (daily)
+  - alternative.me    → Crypto Fear & Greed Index (daily, [0,1])
+  - CNN dataviz       → Stock Fear & Greed Index (daily, [0,1])
+  - FRED DFF          → US Federal Funds Rate + last change (daily)
 """
 
 import logging
@@ -17,6 +20,8 @@ import pandas as pd
 
 from src.collector.deribit_client import DeribitClient
 from src.collector.fema_client import FemaClient
+from src.collector.fear_greed_client import fetch_crypto_fear_greed, fetch_stock_fear_greed
+from src.collector.fed_client import fetch_fed_rate
 from src.collector.gdelt_client import GdeltClient
 from src.collector.options_client import DeribitOptionsClient
 from src.collector.repository import ParquetRepository
@@ -37,6 +42,9 @@ def run(config: dict) -> None:
     _fetch_fema(repo, history_days)
     _fetch_gdelt(repo, history_days)
     _fetch_options_max_pain(config, repo)
+    _fetch_crypto_fear_greed(repo, history_days)
+    _fetch_stock_fear_greed(repo)
+    _fetch_fed_rate(repo)
 
 
 def _fetch_deribit(
@@ -111,6 +119,54 @@ def _fetch_options_max_pain(config: dict, repo: ParquetRepository) -> None:
     )
     with DeribitOptionsClient(days_ahead=days_ahead, days_ahead_short=days_ahead_short) as client:
         df = client.fetch_daily_snapshot()
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_crypto_fear_greed(repo: ParquetRepository, history_days: int) -> None:
+    symbol = "CRYPTO_FEAR_GREED"
+    start, _ = _time_range(repo, symbol, history_days)
+    days_needed = (datetime.now(tz=timezone.utc) - start).days + 1
+    if days_needed <= 0:
+        logger.info("Crypto Fear & Greed already up to date")
+        return
+    logger.info("Fetching Crypto Fear & Greed (%d days)", days_needed)
+    df = fetch_crypto_fear_greed(days=days_needed)
+    if df is None:
+        logger.warning("Crypto F&G fetch failed — skipping persist")
+        return
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_stock_fear_greed(repo: ParquetRepository) -> None:
+    symbol = "STOCK_FEAR_GREED"
+    last = repo.last_timestamp(symbol)
+    today = datetime.now(tz=timezone.utc).date()
+    if last is not None and last.date() >= today:
+        logger.info("Stock Fear & Greed already up to date")
+        return
+    logger.info("Fetching Stock Fear & Greed (CNN)")
+    df = fetch_stock_fear_greed()
+    if df is None:
+        logger.warning("Stock F&G fetch failed — skipping persist")
+        return
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_fed_rate(repo: ParquetRepository) -> None:
+    symbol = "FED_RATE"
+    last = repo.last_timestamp(symbol)
+    today = datetime.now(tz=timezone.utc).date()
+    if last is not None and last.date() >= today:
+        logger.info("Fed rate already up to date")
+        return
+    logger.info("Fetching US Federal Funds Rate (FRED DFF)")
+    df = fetch_fed_rate()
+    if df is None:
+        logger.warning("Fed rate fetch failed — skipping persist")
+        return
     repo.append(symbol, df)
     repo.save_sample(symbol)
 
