@@ -23,7 +23,7 @@ import optuna
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 
-from src.hmm.features import ALL_FEATURE_NAMES, build_feature_matrix, load_common_dataframe
+from src.hmm.features import ALL_EXTRACTORS, ALL_FEATURE_NAMES, build_feature_matrix, load_common_dataframe
 from src.hmm.model import build_model
 from src.utils.paths import models_dir
 
@@ -65,6 +65,30 @@ def load_study(config: dict) -> optuna.Study | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _viable_optional_features(df_common: pd.DataFrame) -> list[str]:
+    """Return optional features with ≥50% non-NaN coverage in df_common.
+
+    Runs all extractors once and checks NaN share per column. Features from
+    sources not yet collected (e.g. Max Pain) would produce 100% NaN and are
+    excluded so Optuna never wastes trials on them.
+    """
+    df = df_common.copy()
+    for ext in ALL_EXTRACTORS:
+        df = ext.transform(df)
+
+    viable = [
+        f for f in _OPTIONAL_FEATURES
+        if f in df.columns and df[f].notna().mean() >= 0.5
+    ]
+    excluded = set(_OPTIONAL_FEATURES) - set(viable)
+    if excluded:
+        logger.info(
+            "Excluded %d features with <50%% coverage: %s",
+            len(excluded), sorted(excluded),
+        )
+    return viable
+
+
 def _build_objective(
     config: dict,
     df_common: pd.DataFrame,
@@ -75,6 +99,10 @@ def _build_objective(
     n_splits: int = hmm_cfg.get("n_splits", 5)
     tscv = TimeSeriesSplit(n_splits=n_splits)
 
+    # Compute once — exclude features without sufficient data
+    viable = _viable_optional_features(df_common)
+    logger.info("Optimizer: %d viable optional features", len(viable))
+
     def objective(trial: optuna.Trial) -> float:
         # --- Hyperparameters ---
         n_components: int = trial.suggest_categorical(
@@ -82,12 +110,9 @@ def _build_objective(
         )
         feature_subset: list[str] = [
             f
-            for f in _OPTIONAL_FEATURES
+            for f in viable
             if trial.suggest_categorical(f"use_{f}", [True, False])
         ]
-
-        # SOL_log_return always included
-        cols = ["SOL_log_return"] + feature_subset
 
         try:
             X_full = build_feature_matrix(df_common.copy(), feature_subset)
@@ -111,7 +136,9 @@ def _build_objective(
                 model = build_model(config, n_components=n_components)
                 model.fit(X_train)
                 ll_per_sample = model.score(X_val) / len(X_val)
-                scores.append(ll_per_sample)
+                # Discard degenerate fits (covariance collapse, near-singular matrix)
+                if np.isfinite(ll_per_sample) and ll_per_sample > -1e4:
+                    scores.append(ll_per_sample)
             except Exception as e:
                 logger.debug("CV fold failed (k=%d): %s", n_components, e)
                 continue
