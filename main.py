@@ -40,8 +40,9 @@ def main() -> None:
     config["_cutoff"]    = now_utc.normalize() - pd.Timedelta(hours=1)     # yesterday 23:00 UTC
     config["_last_hour"] = now_utc.floor("h")                              # last full hour
 
-    run_collect = args.command in (None, "collect")
-    run_hmm = args.command in (None, "hmm")
+    # hmm always collects first so plots show data up to the current hour
+    run_collect = args.command in (None, "collect", "hmm")
+    run_hmm     = args.command in (None, "hmm")
 
     if run_collect:
         from src.collector.fetcher import run as run_collector
