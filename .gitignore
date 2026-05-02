@@ -34,3 +34,7 @@ build/
 # IDE
 .vscode/
 .idea/
+
+# PyTorch Lightning training artifacts
+lightning_logs/
+*.ckpt
