@@ -350,6 +350,12 @@ def main() -> None:
     X_df      = build_feature_matrix(df_common.copy(), subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
+    # Align to yesterday 23:00 UTC — HMM forecast starts at today 00:00 UTC
+    _cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1)
+    if X_df.index[-1] > _cutoff:
+        X_df      = X_df.loc[X_df.index <= _cutoff]
+        sol_close = sol_close.loc[sol_close.index <= _cutoff]
+
     labels      = model.predict(X_df.values)
     regime_info = _assign_regime_colors_and_labels(model, X_df, labels)
 

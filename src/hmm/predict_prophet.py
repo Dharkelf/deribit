@@ -242,6 +242,19 @@ def run(config: dict) -> dict:
     X_df      = build_feature_matrix(df_common.copy(), feature_subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
+    # ── Align to yesterday 23:00 UTC so forecast starts at today 00:00 UTC ──
+    today_midnight = pd.Timestamp.now(tz="UTC").normalize()
+    cutoff = today_midnight - pd.Timedelta(hours=1)
+    if X_df.index[-1] > cutoff:
+        X_df      = X_df.loc[X_df.index <= cutoff]
+        sol_close = sol_close.loc[sol_close.index <= cutoff]
+        logger.info("Data capped at %s UTC; forecast covers today 00:00–23:00 UTC", cutoff)
+    elif X_df.index[-1] < cutoff - pd.Timedelta(hours=23):
+        logger.warning(
+            "Data ends at %s — stale. Run 'python main.py collect' for today's forecast.",
+            X_df.index[-1].date(),
+        )
+
     np_df = _build_np_df(X_df, sol_close, feature_subset)
     np_df = np_df.iloc[-_NP_TRAIN_WINDOW:]  # cap to recent window to avoid OOM
 

@@ -39,7 +39,7 @@ import xgboost as xgb
 
 from src.hmm.features import build_feature_matrix, load_common_dataframe
 from src.hmm.optimizer import _viable_optional_features, load_best_features
-from src.utils.paths import models_dir
+from src.utils.paths import models_dir, raw_dir
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +299,22 @@ def _load_models(config: dict, filename: str) -> tuple | None:
         return pickle.load(f)
 
 
+def _yesterday_end() -> pd.Timestamp:
+    """Return yesterday 23:00 UTC — the last full hour before today's midnight."""
+    return pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1)
+
+
+def _cache_is_stale(config: dict, filename: str) -> bool:
+    """True if the pkl is older than BTC.parquet, meaning data was refreshed."""
+    pkl  = models_dir(config) / filename
+    ref  = raw_dir(config) / "BTC.parquet"
+    if not pkl.exists():
+        return True
+    if not ref.exists():
+        return False
+    return pkl.stat().st_mtime < ref.stat().st_mtime
+
+
 def _filter_24h_features(feature_subset: list[str]) -> list[str]:
     """Drop features with >24h lookback (168h vol, correlations, momentum).
 
@@ -350,8 +366,23 @@ def run(config: dict, *, force: bool = False) -> dict:
     X_df      = build_feature_matrix(df_common.copy(), feature_subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
+    # ── Align to yesterday 23:00 UTC so forecast starts at today 00:00 UTC ──
+    cutoff = _yesterday_end()
+    if X_df.index[-1] > cutoff:
+        X_df      = X_df.loc[X_df.index <= cutoff]
+        sol_close = sol_close.loc[sol_close.index <= cutoff]
+        logger.info("Data capped at %s UTC; forecast covers today 00:00–23:00 UTC", cutoff)
+    elif X_df.index[-1] < cutoff - pd.Timedelta(hours=23):
+        logger.warning(
+            "Data ends at %s — stale. Run 'python main.py collect' for today's forecast.",
+            X_df.index[-1].date(),
+        )
+
     # ── Base models ───────────────────────────────────────────────────────────
-    cached_base = None if force else _load_models(config, _XGB_MODEL_FILENAME)
+    stale_base  = _cache_is_stale(config, _XGB_MODEL_FILENAME)
+    cached_base = None if (force or stale_base) else _load_models(config, _XGB_MODEL_FILENAME)
+    if stale_base and not force:
+        logger.info("XGB base cache stale (parquet refreshed) — retraining")
     if cached_base is not None:
         base_model, q10_model, q90_model = cached_base
         logger.info("XGB base models loaded from cache")
@@ -388,7 +419,10 @@ def run(config: dict, *, force: bool = False) -> dict:
     X_df_full      = build_feature_matrix(df_common.copy(), viable_all)
     sol_close_full = df_common["SOL_close"].reindex(X_df_full.index)
 
-    cached_plus = None if force else _load_models(config, _XGB_PLUS_MODEL_FILENAME)
+    stale_plus  = _cache_is_stale(config, _XGB_PLUS_MODEL_FILENAME)
+    cached_plus = None if (force or stale_plus) else _load_models(config, _XGB_PLUS_MODEL_FILENAME)
+    if stale_plus and not force:
+        logger.info("XGB+ cache stale — retraining")
     if cached_plus is not None:
         plus_model, plus_q10, plus_q90, plus_features = cached_plus
         logger.info("XGB+ models loaded from cache (features: %s)", plus_features)
