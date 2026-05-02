@@ -339,10 +339,8 @@ def _draw_two_week_panel(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def main() -> None:
-    with open(_CONFIG_PATH) as f:
-        config = yaml.safe_load(f)
-
+def run(config: dict) -> None:
+    """Full visualization pipeline. Called from main.py with injected time values."""
     # ── HMM pipeline ──────────────────────────────────────────────────────────
     from src.hmm.optimizer import run_optimization, top_n_results
     from src.hmm.features import build_feature_matrix, load_common_dataframe
@@ -544,7 +542,27 @@ def main() -> None:
     )
 
     fig.tight_layout(pad=2.0)
+
+    out_dir = Path(config.get("paths", {}).get("processed_dir", "data/processed"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "sol_forecast.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    logger.info("Plot saved → %s", out_path)
+
     plt.show()
+
+
+def main() -> None:
+    with open(_CONFIG_PATH) as f:
+        config = yaml.safe_load(f)
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    config["_now_utc"]   = now_utc
+    config["_today"]     = now_utc.normalize()
+    config["_cutoff"]    = now_utc.normalize() - pd.Timedelta(hours=1)
+    config["_last_hour"] = now_utc.floor("h")
+
+    run(config)
 
 
 if __name__ == "__main__":

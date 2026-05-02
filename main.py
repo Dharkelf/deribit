@@ -49,14 +49,8 @@ def main() -> None:
         run_collector(config)
 
     if run_hmm:
-        from src.hmm.predict import run as run_hmm_pipeline
-        run_hmm_pipeline(config)
-
-        from src.hmm.predict_xgb import run as run_xgb
-        run_xgb(config)
-
-        from src.hmm.predict_prophet import run as run_prophet
-        run_prophet(config)
+        from src.hmm.visualize import run as run_visualize
+        run_visualize(config)
 
 
 if __name__ == "__main__":
