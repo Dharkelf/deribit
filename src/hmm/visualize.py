@@ -223,15 +223,19 @@ def _kstep_forecast(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _style_ax(ax: plt.Axes) -> None:
+def _style_ax(ax: plt.Axes, hourly: bool = False) -> None:
     ax.set_facecolor(_AX_BG)
     ax.tick_params(axis="both", labelsize=8.5, colors=_TICK_COLOR)
     ax.grid(axis="y", linewidth=0.3, alpha=0.4, color=_GRID_COLOR)
     ax.grid(axis="x", linewidth=0.2, alpha=0.2, color=_GRID_COLOR)
     ax.spines[["top", "right", "left", "bottom"]].set_color(_SPINE_COLOR)
     ax.set_ylabel("USD", color=_TICK_COLOR, fontsize=9)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=3))
+    if hourly:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b\n%H:00 UTC"))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+    else:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=3))
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("$%.0f"))
 
 
@@ -248,16 +252,18 @@ def _draw_two_week_panel(
     forecast_color: str,
     in_data_label: str,
     forecast_label: str,
+    current_regime: str | None = None,
+    feature_names: list[str] | None = None,
     plus_exp: np.ndarray | None = None,
     plus_in_pred: np.ndarray | None = None,
     plus_in_ts: pd.DatetimeIndex | None = None,
     plus_rmse: float | None = None,
     plus_features: list[str] | None = None,
 ) -> None:
-    """Draw the 2-week (last week + next week) forecast panel."""
+    """Draw the 3-day history + 24h forecast panel."""
     today = in_data_ts[-1]
 
-    # Actual prices (last 168 h)
+    # Actual prices (last 72 h)
     ax.plot(in_data_ts, in_data_actual,
             color=_SOL_COLOR, linewidth=1.2, zorder=4, label="SOL/USD actual")
 
@@ -282,14 +288,28 @@ def _draw_two_week_panel(
                     label=f"CI 80%  [${lo_price[-1]:.0f}–${hi_price[-1]:.0f}]")
     ax.plot(future_ts, exp_price,
             color=forecast_color, linewidth=2.2, linestyle="--", zorder=5,
-            label=f"{forecast_label}  E[+7d]=${exp_price[-1]:.2f}")
+            label=f"{forecast_label}  E[+24h]=${exp_price[-1]:.2f}")
 
     # XGB+ forecast
     if plus_exp is not None:
         feat_str = ", ".join((plus_features or [])[:2])
         ax.plot(future_ts, plus_exp,
                 color=_XGB_PLUS_COLOR, linewidth=2.0, linestyle="-", zorder=5,
-                label=f"{in_data_label}+ E[+7d]=${plus_exp[-1]:.2f}  (+{feat_str}…)")
+                label=f"{in_data_label}+ E[+24h]=${plus_exp[-1]:.2f}  (+{feat_str}…)")
+
+    # Regime + feature annotation (top-right)
+    if current_regime is not None:
+        feat_line = ("Features: " + ", ".join(feature_names)) if feature_names else ""
+        annotation = f"Active regime: {current_regime}\n{feat_line}"
+        ax.text(
+            0.99, 0.97, annotation,
+            transform=ax.transAxes,
+            ha="right", va="top",
+            fontsize=7, color="#cccccc",
+            linespacing=1.5,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#1a1a1a",
+                      edgecolor="#444444", alpha=0.7),
+        )
 
     # Legend
     ax.legend(fontsize=8, loc="upper left", framealpha=0.15,
@@ -332,6 +352,8 @@ def main() -> None:
 
     labels      = model.predict(X_df.values)
     regime_info = _assign_regime_colors_and_labels(model, X_df, labels)
+
+    current_regime_label = regime_info[int(labels[-1])]["label"]
 
     cutoff   = sol_close.index[-1] - pd.Timedelta(days=_LOOKBACK_DAYS)
     mask     = sol_close.index >= cutoff
@@ -408,7 +430,8 @@ def main() -> None:
     )
 
     # ── Panel 2: XGBoost ──────────────────────────────────────────────────────
-    _style_ax(ax2)
+    _style_ax(ax2, hourly=True)
+    xgb_features = xgb_results.get("feature_names", subset)
     _draw_two_week_panel(
         ax2,
         in_data_ts      = xgb_results["in_data_ts"],
@@ -422,6 +445,8 @@ def main() -> None:
         forecast_color  = _XGB_COLOR,
         in_data_label   = "XGB",
         forecast_label  = "XGBoost",
+        current_regime  = current_regime_label,
+        feature_names   = xgb_features,
         plus_exp        = xgb_results.get("xgb_plus_exp"),
         plus_in_pred    = xgb_results.get("xgb_plus_in_pred"),
         plus_in_ts      = xgb_results.get("xgb_plus_in_ts"),
@@ -429,14 +454,14 @@ def main() -> None:
         plus_features   = xgb_results.get("plus_features"),
     )
     ax2.set_title(
-        f"XGBoost recursive forecast  |  E[+7d]: ${xgb_results['xgb_exp'][-1]:.2f}"
+        f"XGBoost recursive forecast  |  E[+24h]: ${xgb_results['xgb_exp'][-1]:.2f}"
         + (f"  XGB+: ${xgb_results['xgb_plus_exp'][-1]:.2f}"
            if xgb_results.get("xgb_plus_exp") is not None else ""),
         color="white", fontsize=10, loc="left", pad=8,
     )
 
     # ── Panel 3: NeuralProphet ────────────────────────────────────────────────
-    _style_ax(ax3)
+    _style_ax(ax3, hourly=True)
     np_r = np_results
     _draw_two_week_panel(
         ax3,
@@ -451,9 +476,11 @@ def main() -> None:
         forecast_color  = _NP_COLOR,
         in_data_label   = "NeuralProphet",
         forecast_label  = "NeuralProphet",
+        current_regime  = current_regime_label,
+        feature_names   = subset,
     )
     ax3.set_title(
-        f"NeuralProphet direct forecast  |  E[+7d]: ${np_r['np_exp'][-1]:.2f}"
+        f"NeuralProphet direct forecast  |  E[+24h]: ${np_r['np_exp'][-1]:.2f}"
         if not np.isnan(np_r["np_exp"][-1]) else "NeuralProphet direct forecast",
         color="white", fontsize=10, loc="left", pad=8,
     )

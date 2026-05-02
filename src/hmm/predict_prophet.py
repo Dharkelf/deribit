@@ -48,8 +48,9 @@ from src.hmm.optimizer import load_best_features
 
 logger = logging.getLogger(__name__)
 
-_FORECAST_HOURS   = 7 * 24   # 168 steps
-_NP_TRAIN_WINDOW  = 2000     # keep most recent rows; avoids OOM on 8500+ row datasets
+_FORECAST_HOURS   = 24        # direct 24h prediction; avoids recursive error accumulation
+_INDATA_HOURS     = 72        # in-data window shown in plot (last 3 days)
+_NP_TRAIN_WINDOW  = 4000      # ~167 days; safe on M5 16 GB with n_forecasts=24
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,8 +115,8 @@ def _train_model(
 
     set_log_level("ERROR")
 
-    # n_lags=48 (2 days): balances memory usage vs. AR context on 8500+ rows with 14 regressors
-    n_lags_ar = min(48, len(np_df) // 4)
+    # n_lags=168 (1 week): safe now that n_forecasts=24 (not 168) keeps memory low
+    n_lags_ar = min(168, len(np_df) // 4)
 
     model = NeuralProphet(
         n_forecasts=_FORECAST_HOURS,
@@ -159,8 +160,8 @@ def _extract_forecast(
     """
     last_known_ds = np_df["ds"].iloc[-1]
 
-    # Historic (in-data) window — last 168 rows
-    hist = forecast[forecast["ds"] <= last_known_ds].tail(_FORECAST_HOURS).copy()
+    # Historic (in-data) window — last 72 h; future — next 24 h
+    hist = forecast[forecast["ds"] <= last_known_ds].tail(_INDATA_HOURS).copy()
     fut  = forecast[forecast["ds"] >  last_known_ds].head(_FORECAST_HOURS).copy()
 
     def _to_utc(ds_series: pd.Series) -> pd.DatetimeIndex:
@@ -246,8 +247,8 @@ def run(config: dict) -> dict:
 
     # NeuralProphet's Trainer is not safely serializable with PyTorch ≥2.6; always retrain.
     logger.info(
-        "Training NeuralProphet (%d rows, AR n_lags=%d, %d regressors) …",
-        len(np_df), min(48, len(np_df) // 4), len(feature_subset),
+        "Training NeuralProphet (%d rows, AR n_lags=%d, n_forecasts=%d, %d regressors) …",
+        len(np_df), min(168, len(np_df) // 4), _FORECAST_HOURS, len(feature_subset),
     )
     model = _train_model(np_df, feature_subset, config)
 

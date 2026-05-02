@@ -43,8 +43,10 @@ from src.utils.paths import models_dir
 
 logger = logging.getLogger(__name__)
 
-_FORECAST_HOURS = 7 * 24   # 168 steps
-_LONG_WINDOW    = 168
+_FORECAST_HOURS  = 7 * 24   # 168 steps (full model horizon)
+_DISPLAY_HOURS   = 24       # hours shown in plot forecast
+_INDATA_HOURS    = 72       # hours shown in plot in-data window
+_LONG_WINDOW     = 168
 _SHORT_WINDOW   = 24
 
 _XGB_MODEL_FILENAME      = "xgb_model.pkl"
@@ -297,6 +299,18 @@ def _load_models(config: dict, filename: str) -> tuple | None:
         return pickle.load(f)
 
 
+def _filter_24h_features(feature_subset: list[str]) -> list[str]:
+    """Drop features with >24h lookback (168h vol, correlations, momentum).
+
+    These are useful for regime detection but irrelevant for a 24h-horizon
+    recursive forecast where only recent context matters.
+    """
+    return [
+        f for f in feature_subset
+        if "_168h" not in f and "_momentum" not in f
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,8 +340,11 @@ def run(config: dict, *, force: bool = False) -> dict:
     if best is None:
         raise FileNotFoundError("best_features.json missing; run HMM pipeline first")
 
-    feature_subset: list[str] = best["feature_subset"]
-    logger.info("Using %d HMM-selected features", len(feature_subset))
+    feature_subset: list[str] = _filter_24h_features(best["feature_subset"])
+    logger.info(
+        "Using %d HMM-selected features (≤24h lookback, filtered from %d)",
+        len(feature_subset), len(best["feature_subset"]),
+    )
 
     df_common = load_common_dataframe(config)
     X_df      = build_feature_matrix(df_common.copy(), feature_subset)
@@ -349,16 +366,20 @@ def run(config: dict, *, force: bool = False) -> dict:
 
     # ── In-data prediction (real features, no recursion) ─────────────────────
     in_data_ts, in_data_pred, in_data_actual, in_data_rmse = _in_data_predict(
-        base_model, X_df, sol_close
+        base_model, X_df, sol_close, window=_INDATA_HOURS
     )
-    logger.info("In-data RMSE (last 168 h): $%.2f", in_data_rmse)
+    logger.info("In-data RMSE (last %d h): $%.2f", _INDATA_HOURS, in_data_rmse)
 
-    # ── Recursive 7-day forecast ──────────────────────────────────────────────
-    future_ts, xgb_exp, xgb_lo, xgb_hi = _recursive_forecast(
+    # ── Recursive forecast — full 168 steps, display trimmed to 24 h ─────────
+    future_ts_full, xgb_exp_full, xgb_lo_full, xgb_hi_full = _recursive_forecast(
         base_model, q10_model, q90_model, X_df, sol_close
     )
+    future_ts = future_ts_full[:_DISPLAY_HOURS]
+    xgb_exp   = xgb_exp_full[:_DISPLAY_HOURS]
+    xgb_lo    = xgb_lo_full[:_DISPLAY_HOURS]
+    xgb_hi    = xgb_hi_full[:_DISPLAY_HOURS]
     logger.info(
-        "XGB forecast: last=$%.2f  E[+7d]=$%.2f  CI=[$%.2f, $%.2f]",
+        "XGB forecast: last=$%.2f  E[+24h]=$%.2f  CI=[$%.2f, $%.2f]",
         float(sol_close.iloc[-1]), xgb_exp[-1], xgb_lo[-1], xgb_hi[-1],
     )
 
@@ -397,14 +418,15 @@ def run(config: dict, *, force: bool = False) -> dict:
         X_plus      = build_feature_matrix(df_common.copy(), plus_subset)
         sol_plus    = df_common["SOL_close"].reindex(X_plus.index)
 
-        _, xgb_plus_exp, _, _ = _recursive_forecast(
+        _fts, _exp, _, _ = _recursive_forecast(
             plus_model, plus_q10, plus_q90, X_plus, sol_plus
         )
+        xgb_plus_exp = _exp[:_DISPLAY_HOURS]
         xgb_plus_in_ts, xgb_plus_in_pred, _, xgb_plus_rmse = _in_data_predict(
-            plus_model, X_plus, sol_plus
+            plus_model, X_plus, sol_plus, window=_INDATA_HOURS
         )
         logger.info(
-            "XGB+ E[+7d]=$%.2f  in-data RMSE=$%.2f  added: %s",
+            "XGB+ E[+24h]=$%.2f  in-data RMSE=$%.2f  added: %s",
             xgb_plus_exp[-1], xgb_plus_rmse, plus_features,
         )
 
@@ -422,5 +444,6 @@ def run(config: dict, *, force: bool = False) -> dict:
         "xgb_plus_in_ts":   xgb_plus_in_ts,
         "xgb_plus_rmse":    xgb_plus_rmse,
         "plus_features":    plus_features,
+        "feature_names":    feature_subset,
         "sol_last":         float(sol_close.iloc[-1]),
     }
