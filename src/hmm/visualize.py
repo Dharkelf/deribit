@@ -1,13 +1,25 @@
-"""SOL/USD regime visualization with 1-week forecast.
+"""SOL/USD combined regime + forecast visualization — three panels.
 
-Standalone script — not imported by any other module.
+Panel 1 — HMM Regime (full year)
+  SOL/USD close price over the last 365 days; regime background shading;
+  1-week HMM k-step Markov forecast ±2σ; regime legend with frequency,
+  mean hourly return, and annualised volatility.
 
-Shows:
-  - SOL/USD close price over the last 365 days
-  - Regime background shading (contiguous coloured bands under the curve)
-  - 1-week hourly forecast line with ±2σ confidence band
-  - Regime legend: colour, label (Bullish/Neutral/Bearish by mean return),
-    frequency, and annualised volatility per regime
+Panel 2 — XGBoost (2-week window)
+  Last 7 days actual SOL + in-data XGB fitted prices (quality check);
+  next 7 days XGB recursive forecast with q10/q90 CI band;
+  optional XGB+ overlay with top-3 non-selected features.
+
+Panel 3 — NeuralProphet (2-week window)
+  Last 7 days actual SOL + NeuralProphet fitted values;
+  next 7 days NeuralProphet direct multi-step forecast with q10/q90 CI.
+
+Semantic regime labels (k=5, sorted by mean SOL log-return)
+  Rank 1 → Strong Bearish (dark red)
+  Rank 2 → Bearish        (red)
+  Rank 3 → Neutral        (amber)
+  Rank 4 → Bullish        (green)
+  Rank 5 → Strong Bullish (dark green)
 
 Usage:
     python -m src.hmm.visualize
@@ -28,23 +40,35 @@ import yaml
 
 warnings.filterwarnings("ignore")
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT        = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _ROOT / "config" / "settings.yaml"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
 
-_LOOKBACK_DAYS = 365
-_FORECAST_HOURS = 7 * 24  # 168 steps
+_LOOKBACK_DAYS  = 365
+_FORECAST_HOURS = 7 * 24   # 168 steps
 
-# Regime colours — sorted by mean SOL return: bearish → neutral → bullish
-_BEARISH_COLOR  = "#e74c3c"   # red
-_NEUTRAL_COLOR  = "#f39c12"   # amber
-_BULLISH_COLOR  = "#2ecc71"   # green
-_EXTRA_COLORS   = ["#8172b2", "#3498db"]   # for k > 3
+# ── Regime colours (sorted by mean SOL return: lowest → highest rank) ─────────
+_STRONG_BEARISH_COLOR = "#922b21"   # dark red
+_BEARISH_COLOR        = "#e74c3c"   # red
+_NEUTRAL_COLOR        = "#f39c12"   # amber
+_BULLISH_COLOR        = "#2ecc71"   # green
+_STRONG_BULLISH_COLOR = "#1e8449"   # dark green
+_EXTRA_COLORS         = ["#8172b2", "#3498db", "#9b59b6", "#1abc9c"]  # k > 5
 
+# ── Forecast / asset colours ──────────────────────────────────────────────────
 _SOL_COLOR      = "#9945ff"   # SOL purple
-_FORECAST_COLOR = "#f1c40f"   # yellow
+_HMM_COLOR      = "#f1c40f"   # yellow
+_XGB_COLOR      = "#3498db"   # blue
+_XGB_PLUS_COLOR = "#1abc9c"   # teal
+_NP_COLOR       = "#e67e22"   # orange
+_INDATA_ALPHA   = 0.55        # in-data prediction line opacity
+_BG             = "#0f0f0f"
+_AX_BG          = "#0f0f0f"
+_TICK_COLOR     = "#bbbbbb"
+_GRID_COLOR     = "#444444"
+_SPINE_COLOR    = "#333333"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,50 +77,56 @@ _FORECAST_COLOR = "#f1c40f"   # yellow
 
 
 def _assign_regime_colors_and_labels(
-    model,
+    model: object,
     X_df: pd.DataFrame,
     labels: np.ndarray,
 ) -> dict[int, dict]:
-    """Characterise each regime by mean SOL log-return and volatility.
+    """Assign semantic colour + label per regime, sorted by mean SOL log-return.
 
-    Regimes are ranked by mean return:
-      lowest  → Bearish  (red)
-      highest → Bullish  (green)
-      middle  → Neutral  (amber)   [only for k=3+]
-    Extra regimes (k>3) get purple / blue.
-
-    Returns dict[regime_id] → {color, label, frequency, ann_vol_pct}
+    Ranks: 1 = lowest mean return (most bearish) … k = highest (most bullish).
+    Handles k = 2 … 5 explicitly; k > 5 gets generic labels.
     """
-    sol_idx = list(X_df.columns).index("SOL_log_return")
-    means    = model._model.means_[:, sol_idx]          # (k,)
-    covars   = model._model.covars_                     # shape depends on type
-    k        = model.n_components
+    sol_idx  = list(X_df.columns).index("SOL_log_return")
+    means    = model._model.means_[:, sol_idx]          # type: ignore[attr-defined]
+    covars   = model._model.covars_                     # type: ignore[attr-defined]
+    k        = model.n_components                       # type: ignore[attr-defined]
 
-    if model.covariance_type == "full":
+    if model.covariance_type == "full":                 # type: ignore[attr-defined]
         vols = np.array([covars[i][sol_idx, sol_idx] for i in range(k)])
-    elif model.covariance_type == "diag":
+    elif model.covariance_type == "diag":               # type: ignore[attr-defined]
         vols = covars[:, sol_idx]
-    elif model.covariance_type == "tied":
+    elif model.covariance_type == "tied":               # type: ignore[attr-defined]
         vols = np.full(k, covars[sol_idx, sol_idx])
     else:
         vols = covars
 
-    ann_vols = np.sqrt(np.maximum(vols, 0) * 24 * 365) * 100  # annualised %
+    ann_vols = np.sqrt(np.maximum(vols, 0) * 24 * 365) * 100
 
-    # Rank by mean return
-    order = np.argsort(means)        # ascending: lowest → highest
-    base_labels = {
-        1: "Bearish",
-        k: "Bullish",
-    }
+    order = np.argsort(means)   # ascending rank: rank 1 = lowest mean return
+
     if k == 2:
+        base_labels = {1: "Bearish", 2: "Bullish"}
         base_colors = [_BEARISH_COLOR, _BULLISH_COLOR]
     elif k == 3:
-        base_labels[2] = "Neutral"
+        base_labels = {1: "Bearish", 2: "Neutral", 3: "Bullish"}
         base_colors = [_BEARISH_COLOR, _NEUTRAL_COLOR, _BULLISH_COLOR]
+    elif k == 4:
+        base_labels = {1: "Strong Bearish", 2: "Bearish", 3: "Bullish", 4: "Strong Bullish"}
+        base_colors = [_STRONG_BEARISH_COLOR, _BEARISH_COLOR, _BULLISH_COLOR, _STRONG_BULLISH_COLOR]
+    elif k == 5:
+        base_labels = {
+            1: "Strong Bearish", 2: "Bearish",
+            3: "Neutral",
+            4: "Bullish",       5: "Strong Bullish",
+        }
+        base_colors = [
+            _STRONG_BEARISH_COLOR, _BEARISH_COLOR, _NEUTRAL_COLOR,
+            _BULLISH_COLOR, _STRONG_BULLISH_COLOR,
+        ]
     else:
-        mid_colors = _EXTRA_COLORS[: k - 2]
-        base_colors = [_BEARISH_COLOR] + mid_colors + [_BULLISH_COLOR]
+        mid_colors  = _EXTRA_COLORS[: k - 2]
+        base_colors = [_STRONG_BEARISH_COLOR] + mid_colors + [_STRONG_BULLISH_COLOR]
+        base_labels = {1: "Strong Bearish", k: "Strong Bullish"}
         for rank in range(2, k):
             base_labels[rank] = f"Regime {rank}"
 
@@ -120,7 +150,7 @@ def _shade_regimes(
     regime_info: dict[int, dict],
     alpha: float = 0.22,
 ) -> None:
-    """Fill contiguous regime blocks with semi-transparent bands."""
+    """Fill contiguous regime blocks with semi-transparent colour bands."""
     i = 0
     while i < len(labels):
         r = labels[i]
@@ -128,53 +158,55 @@ def _shade_regimes(
         while j < len(labels) and labels[j] == r:
             j += 1
         t_end = timestamps[min(j, len(timestamps) - 1)]
-        ax.axvspan(
-            timestamps[i], t_end,
-            alpha=alpha,
-            color=regime_info[r]["color"],
-            linewidth=0,
-        )
+        ax.axvspan(timestamps[i], t_end, alpha=alpha,
+                   color=regime_info[r]["color"], linewidth=0)
         i = j
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Forecast (reused from predict.py logic, self-contained here)
+# HMM k-step forecast (self-contained copy from predict.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _kstep_forecast(model, X_df: pd.DataFrame, k: int, sol_last: float):
-    hmm       = model._model
+def _kstep_forecast(
+    model: object,
+    X_df: pd.DataFrame,
+    k: int,
+    sol_last: float,
+) -> tuple[pd.DatetimeIndex, np.ndarray, np.ndarray, np.ndarray]:
+    hmm       = model._model                            # type: ignore[attr-defined]
     A         = hmm.transmat_
     means     = hmm.means_
     covars    = hmm.covars_
     sol_idx   = list(X_df.columns).index("SOL_log_return")
     state_mean = means[:, sol_idx]
+    n_states  = model.n_components                      # type: ignore[attr-defined]
 
-    if model.covariance_type == "full":
-        state_var = np.array([covars[i][sol_idx, sol_idx] for i in range(model.n_components)])
-    elif model.covariance_type == "diag":
+    if model.covariance_type == "full":                 # type: ignore[attr-defined]
+        state_var = np.array([covars[i][sol_idx, sol_idx] for i in range(n_states)])
+    elif model.covariance_type == "diag":               # type: ignore[attr-defined]
         state_var = covars[:, sol_idx]
-    elif model.covariance_type == "tied":
-        state_var = np.full(model.n_components, covars[sol_idx, sol_idx])
+    elif model.covariance_type == "tied":               # type: ignore[attr-defined]
+        state_var = np.full(n_states, covars[sol_idx, sol_idx])
     else:
         state_var = covars
 
-    pi_j = model.predict_proba(X_df.values)[-1]
-    cum_lr, cum_var = 0.0, 0.0
+    pi_j     = model.predict_proba(X_df.values)[-1]    # type: ignore[attr-defined]
     cum_lrs  = np.zeros(k)
     cum_vars = np.zeros(k)
+    cum_lr = cum_var = 0.0
 
     for j in range(k):
-        mu_j   = float(pi_j @ state_mean)
-        ex2_j  = float(pi_j @ (state_mean ** 2 + state_var))
-        var_j  = ex2_j - mu_j ** 2
+        mu_j  = float(pi_j @ state_mean)
+        ex2_j = float(pi_j @ (state_mean ** 2 + state_var))
+        var_j = ex2_j - mu_j ** 2
         cum_lr  += mu_j
         cum_var += max(var_j, 0.0)
         cum_lrs[j]  = cum_lr
         cum_vars[j] = cum_var
         pi_j = pi_j @ A
 
-    sigma     = np.sqrt(cum_vars)
+    sigma    = np.sqrt(cum_vars)
     exp_price = sol_last * np.exp(cum_lrs)
     lo_price  = sol_last * np.exp(cum_lrs - 2.0 * sigma)
     hi_price  = sol_last * np.exp(cum_lrs + 2.0 * sigma)
@@ -187,6 +219,84 @@ def _kstep_forecast(model, X_df: pd.DataFrame, k: int, sol_last: float):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Panel helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _style_ax(ax: plt.Axes) -> None:
+    ax.set_facecolor(_AX_BG)
+    ax.tick_params(axis="both", labelsize=8.5, colors=_TICK_COLOR)
+    ax.grid(axis="y", linewidth=0.3, alpha=0.4, color=_GRID_COLOR)
+    ax.grid(axis="x", linewidth=0.2, alpha=0.2, color=_GRID_COLOR)
+    ax.spines[["top", "right", "left", "bottom"]].set_color(_SPINE_COLOR)
+    ax.set_ylabel("USD", color=_TICK_COLOR, fontsize=9)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=3))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("$%.0f"))
+
+
+def _draw_two_week_panel(
+    ax: plt.Axes,
+    in_data_ts: pd.DatetimeIndex,
+    in_data_actual: np.ndarray,
+    in_data_pred: np.ndarray,
+    in_data_rmse: float,
+    future_ts: pd.DatetimeIndex,
+    exp_price: np.ndarray,
+    lo_price: np.ndarray,
+    hi_price: np.ndarray,
+    forecast_color: str,
+    in_data_label: str,
+    forecast_label: str,
+    plus_exp: np.ndarray | None = None,
+    plus_in_pred: np.ndarray | None = None,
+    plus_in_ts: pd.DatetimeIndex | None = None,
+    plus_rmse: float | None = None,
+    plus_features: list[str] | None = None,
+) -> None:
+    """Draw the 2-week (last week + next week) forecast panel."""
+    today = in_data_ts[-1]
+
+    # Actual prices (last 168 h)
+    ax.plot(in_data_ts, in_data_actual,
+            color=_SOL_COLOR, linewidth=1.2, zorder=4, label="SOL/USD actual")
+
+    # In-data model predictions
+    ax.plot(in_data_ts, in_data_pred,
+            color=forecast_color, linewidth=1.0, alpha=_INDATA_ALPHA, linestyle="-",
+            zorder=3, label=f"{in_data_label} in-data  RMSE=${in_data_rmse:.2f}")
+
+    # XGB+ in-data (if available)
+    if plus_in_pred is not None and plus_in_ts is not None:
+        ts_for_plus = plus_in_ts if len(plus_in_ts) == len(plus_in_pred) else in_data_ts
+        ax.plot(ts_for_plus, plus_in_pred,
+                color=_XGB_PLUS_COLOR, linewidth=1.0, alpha=_INDATA_ALPHA, linestyle="-",
+                zorder=3, label=f"{in_data_label}+ in-data  RMSE=${plus_rmse:.2f}")
+
+    # Today divider
+    ax.axvline(today, color="#555555", linewidth=0.8, linestyle=":", zorder=3)
+
+    # Forecast
+    ax.fill_between(future_ts, lo_price, hi_price,
+                    color=forecast_color, alpha=0.15, zorder=2,
+                    label=f"CI 80%  [${lo_price[-1]:.0f}–${hi_price[-1]:.0f}]")
+    ax.plot(future_ts, exp_price,
+            color=forecast_color, linewidth=2.2, linestyle="--", zorder=5,
+            label=f"{forecast_label}  E[+7d]=${exp_price[-1]:.2f}")
+
+    # XGB+ forecast
+    if plus_exp is not None:
+        feat_str = ", ".join((plus_features or [])[:2])
+        ax.plot(future_ts, plus_exp,
+                color=_XGB_PLUS_COLOR, linewidth=2.0, linestyle="-", zorder=5,
+                label=f"{in_data_label}+ E[+7d]=${plus_exp[-1]:.2f}  (+{feat_str}…)")
+
+    # Legend
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.15,
+              labelcolor="white", facecolor="#1a1a1a", edgecolor="#333333")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -195,133 +305,160 @@ def main() -> None:
     with open(_CONFIG_PATH) as f:
         config = yaml.safe_load(f)
 
-    # ── Load optimizer results ────────────────────────────────────────────────
+    # ── HMM pipeline ──────────────────────────────────────────────────────────
     from src.hmm.optimizer import run_optimization, top_n_results
     from src.hmm.features import build_feature_matrix, load_common_dataframe
     from src.hmm.model import GaussianHMMModel, build_model
     from src.utils.paths import models_dir
 
-    study    = run_optimization(config)
-    best     = top_n_results(study, n=1)[0]
-    n_k      = best["n_components"]
-    subset   = best["feature_subset"]
+    study  = run_optimization(config)
+    best   = top_n_results(study, n=1)[0]
+    n_k    = best["n_components"]
+    subset = best["feature_subset"]
 
-    # ── Load or fit final model ───────────────────────────────────────────────
     model_path = models_dir(config) / f"best_hmm_k{n_k}.pkl"
     if model_path.exists():
-        logger.info("Loading saved model ← %s", model_path)
         model = GaussianHMMModel.load(model_path)
     else:
-        logger.info("Fitting model (n_components=%d) on full dataset …", n_k)
         df_common = load_common_dataframe(config)
         X_df      = build_feature_matrix(df_common.copy(), subset)
         model     = build_model(config, n_components=n_k)
         model.fit(X_df.values)
         model.save(model_path)
 
-    # ── Build feature matrix and align SOL price ──────────────────────────────
     df_common = load_common_dataframe(config)
     X_df      = build_feature_matrix(df_common.copy(), subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
-    # ── Predict regimes ───────────────────────────────────────────────────────
-    labels     = model.predict(X_df.values)
+    labels      = model.predict(X_df.values)
     regime_info = _assign_regime_colors_and_labels(model, X_df, labels)
 
-    # ── Restrict history to lookback window ───────────────────────────────────
     cutoff   = sol_close.index[-1] - pd.Timedelta(days=_LOOKBACK_DAYS)
     mask     = sol_close.index >= cutoff
     sol_year = sol_close[mask]
+    idx_start  = int(np.searchsorted(X_df.index, sol_year.index[0]))
+    lab_year   = labels[idx_start: idx_start + len(sol_year)]
+    ts_year    = sol_year.index
 
-    idx_start   = int(np.searchsorted(X_df.index, sol_year.index[0]))
-    lab_year    = labels[idx_start: idx_start + len(sol_year)]
-    ts_year     = sol_year.index
-
-    # ── 7-day forecast ────────────────────────────────────────────────────────
     sol_last = float(sol_close.iloc[-1])
-    future_ts, exp_price, lo_price, hi_price = _kstep_forecast(
+    future_ts_hmm, exp_price_hmm, lo_price_hmm, hi_price_hmm = _kstep_forecast(
         model, X_df, _FORECAST_HOURS, sol_last
     )
-
     logger.info(
-        "SOL last=$%.2f  E[+7d]=$%.2f  CI=[$%.2f, $%.2f]",
-        sol_last, exp_price[-1], lo_price[-1], hi_price[-1],
+        "HMM: last=$%.2f  E[+7d]=$%.2f  CI=[$%.2f, $%.2f]",
+        sol_last, exp_price_hmm[-1], lo_price_hmm[-1], hi_price_hmm[-1],
     )
 
-    # ── Plot ──────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(17, 6))
-    fig.patch.set_facecolor("#0f0f0f")
-    ax.set_facecolor("#0f0f0f")
+    # ── XGBoost pipeline ──────────────────────────────────────────────────────
+    from src.hmm.predict_xgb import run as run_xgb
+    xgb_results = run_xgb(config)
 
-    # Regime shading
-    _shade_regimes(ax, ts_year, lab_year, regime_info, alpha=0.25)
+    # ── NeuralProphet pipeline ────────────────────────────────────────────────
+    from src.hmm.predict_prophet import run as run_np
+    np_results = run_np(config)
 
-    # Historical SOL price
-    ax.plot(
-        sol_year.index, sol_year.values,
-        color=_SOL_COLOR, linewidth=1.2, zorder=4, label="SOL/USD close",
-    )
+    # ── Build figure (3 panels) ───────────────────────────────────────────────
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(17, 18))
+    fig.patch.set_facecolor(_BG)
 
-    # Vertical "today" divider
-    today = sol_close.index[-1]
-    ax.axvline(today, color="#555555", linewidth=0.8, linestyle=":", zorder=3)
+    # ── Panel 1: HMM (1-year view) ────────────────────────────────────────────
+    ax1.set_facecolor(_AX_BG)
+    _shade_regimes(ax1, ts_year, lab_year, regime_info, alpha=0.25)
+    ax1.plot(sol_year.index, sol_year.values,
+             color=_SOL_COLOR, linewidth=1.2, zorder=4, label="SOL/USD close")
+    ax1.axvline(sol_close.index[-1], color="#555555", linewidth=0.8, linestyle=":", zorder=3)
+    ax1.plot(future_ts_hmm, exp_price_hmm,
+             color=_HMM_COLOR, linewidth=2.2, linestyle="--", zorder=5,
+             label=f"HMM E[+7d]  ${exp_price_hmm[-1]:.2f}")
+    ax1.fill_between(future_ts_hmm, lo_price_hmm, hi_price_hmm,
+                     color=_HMM_COLOR, alpha=0.15, zorder=2,
+                     label=f"±2σ  [${lo_price_hmm[-1]:.0f}–${hi_price_hmm[-1]:.0f}]")
 
-    # Forecast
-    ax.plot(
-        future_ts, exp_price,
-        color=_FORECAST_COLOR, linewidth=2.2, linestyle="--", zorder=5,
-        label=f"E[+7d]  ${exp_price[-1]:.2f}",
-    )
-    ax.fill_between(
-        future_ts, lo_price, hi_price,
-        color=_FORECAST_COLOR, alpha=0.15, zorder=2,
-        label=f"±2σ  [${lo_price[-1]:.0f} – ${hi_price[-1]:.0f}]",
-    )
-
-    # ── Legend ────────────────────────────────────────────────────────────────
     regime_handles = []
     for rid, info in sorted(regime_info.items()):
-        lbl = (
-            f"{info['label']}  "
-            f"({info['frequency']:.0%} | "
-            f"μ={info['mean_ret']*100:+.3f}%/h | "
-            f"σ={info['ann_vol_pct']:.0f}% ann.)"
-        )
-        regime_handles.append(
-            Patch(facecolor=info["color"], alpha=0.55, label=lbl)
-        )
+        lbl = (f"{info['label']}  "
+               f"({info['frequency']:.0%} | "
+               f"μ={info['mean_ret']*100:+.3f}%/h | "
+               f"σ={info['ann_vol_pct']:.0f}% ann.)")
+        regime_handles.append(Patch(facecolor=info["color"], alpha=0.55, label=lbl))
 
-    all_handles, all_labels = ax.get_legend_handles_labels()
-    legend = ax.legend(
-        handles=regime_handles + all_handles,
-        labels=[h.get_label() for h in regime_handles] + all_labels,
-        fontsize=8.5,
-        loc="upper left",
-        framealpha=0.15,
-        labelcolor="white",
-        facecolor="#1a1a1a",
-        edgecolor="#333333",
+    all_h, all_l = ax1.get_legend_handles_labels()
+    ax1.legend(
+        handles=regime_handles + all_h,
+        labels=[h.get_label() for h in regime_handles] + all_l,
+        fontsize=8.5, loc="upper left", framealpha=0.15,
+        labelcolor="white", facecolor="#1a1a1a", edgecolor="#333333",
     )
 
-    # ── Axes formatting ───────────────────────────────────────────────────────
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("$%.0f"))
-    ax.tick_params(axis="both", labelsize=8.5, colors="#bbbbbb")
-    ax.grid(axis="y", linewidth=0.3, alpha=0.4, color="#444444")
-    ax.grid(axis="x", linewidth=0.2, alpha=0.2, color="#444444")
-    ax.spines[["top", "right", "left", "bottom"]].set_color("#333333")
-    ax.set_ylabel("USD", color="#bbbbbb", fontsize=9)
+    ax1.tick_params(axis="both", labelsize=8.5, colors=_TICK_COLOR)
+    ax1.grid(axis="y", linewidth=0.3, alpha=0.4, color=_GRID_COLOR)
+    ax1.grid(axis="x", linewidth=0.2, alpha=0.2, color=_GRID_COLOR)
+    ax1.spines[["top", "right", "left", "bottom"]].set_color(_SPINE_COLOR)
+    ax1.set_ylabel("USD", color=_TICK_COLOR, fontsize=9)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+    ax1.yaxis.set_major_formatter(mticker.FormatStrFormatter("$%.0f"))
 
     last_date  = sol_close.index[-1].strftime("%Y-%m-%d")
-    fcast_date = future_ts[-1].strftime("%Y-%m-%d")
-    ax.set_title(
-        f"SOL/USD — {n_k}-Regime HMM  |  Last: ${sol_last:.2f} ({last_date})  "
-        f"→  E[+7d]: ${exp_price[-1]:.2f} ({fcast_date})",
+    fcast_date = future_ts_hmm[-1].strftime("%Y-%m-%d")
+    ax1.set_title(
+        f"SOL/USD — {n_k}-Regime HMM  |  Last: ${sol_last:.2f} ({last_date})"
+        f"  →  E[+7d]: ${exp_price_hmm[-1]:.2f} ({fcast_date})",
         color="white", fontsize=11, loc="left", pad=10,
     )
 
-    fig.tight_layout()
+    # ── Panel 2: XGBoost ──────────────────────────────────────────────────────
+    _style_ax(ax2)
+    _draw_two_week_panel(
+        ax2,
+        in_data_ts      = xgb_results["in_data_ts"],
+        in_data_actual  = xgb_results["in_data_actual"],
+        in_data_pred    = xgb_results["in_data_pred"],
+        in_data_rmse    = xgb_results["in_data_rmse"],
+        future_ts       = xgb_results["future_ts"],
+        exp_price       = xgb_results["xgb_exp"],
+        lo_price        = xgb_results["xgb_lo"],
+        hi_price        = xgb_results["xgb_hi"],
+        forecast_color  = _XGB_COLOR,
+        in_data_label   = "XGB",
+        forecast_label  = "XGBoost",
+        plus_exp        = xgb_results.get("xgb_plus_exp"),
+        plus_in_pred    = xgb_results.get("xgb_plus_in_pred"),
+        plus_in_ts      = xgb_results.get("xgb_plus_in_ts"),
+        plus_rmse       = xgb_results.get("xgb_plus_rmse"),
+        plus_features   = xgb_results.get("plus_features"),
+    )
+    ax2.set_title(
+        f"XGBoost recursive forecast  |  E[+7d]: ${xgb_results['xgb_exp'][-1]:.2f}"
+        + (f"  XGB+: ${xgb_results['xgb_plus_exp'][-1]:.2f}"
+           if xgb_results.get("xgb_plus_exp") is not None else ""),
+        color="white", fontsize=10, loc="left", pad=8,
+    )
+
+    # ── Panel 3: NeuralProphet ────────────────────────────────────────────────
+    _style_ax(ax3)
+    np_r = np_results
+    _draw_two_week_panel(
+        ax3,
+        in_data_ts      = np_r["in_data_ts"],
+        in_data_actual  = np_r["in_data_actual"],
+        in_data_pred    = np_r["in_data_pred"],
+        in_data_rmse    = np_r["in_data_rmse"],
+        future_ts       = np_r["future_ts"],
+        exp_price       = np_r["np_exp"],
+        lo_price        = np_r["np_lo"],
+        hi_price        = np_r["np_hi"],
+        forecast_color  = _NP_COLOR,
+        in_data_label   = "NeuralProphet",
+        forecast_label  = "NeuralProphet",
+    )
+    ax3.set_title(
+        f"NeuralProphet direct forecast  |  E[+7d]: ${np_r['np_exp'][-1]:.2f}"
+        if not np.isnan(np_r["np_exp"][-1]) else "NeuralProphet direct forecast",
+        color="white", fontsize=10, loc="left", pad=8,
+    )
+
+    fig.tight_layout(pad=2.0)
     plt.show()
 
 

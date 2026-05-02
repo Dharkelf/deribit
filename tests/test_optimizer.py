@@ -13,6 +13,8 @@ from src.hmm.optimizer import (
     _median_run_length,
     _params_to_feature_subset,
     _selection_score,
+    load_best_features,
+    save_best_features,
     top_n_results,
 )
 
@@ -273,3 +275,31 @@ def test_save_load_study(tmp_path: Path) -> None:
 
     assert loaded is not None
     assert len(loaded.trials) == len(study.trials)
+
+
+def test_save_load_best_features(tmp_path: Path) -> None:
+    from src.hmm.optimizer import load_best_features, save_best_features
+
+    study = _make_fake_study(n_complete=6)
+
+    import src.utils.paths as _paths
+    orig = _paths.models_dir
+
+    def _fake_models_dir(config: dict) -> Path:
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        return tmp_path
+
+    _paths.models_dir = _fake_models_dir
+    try:
+        cfg = {"storage": {"models_dir": str(tmp_path)}, "hmm": {}}
+        path = save_best_features(study, cfg)
+        loaded = load_best_features(cfg)
+    finally:
+        _paths.models_dir = orig
+
+    assert loaded is not None
+    assert "n_components" in loaded
+    assert "feature_subset" in loaded
+    assert "score" in loaded
+    assert isinstance(loaded["feature_subset"], list)
+    assert path.exists()

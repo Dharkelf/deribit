@@ -21,9 +21,9 @@ options:
   max_pain_days_ahead_short: 7    # short window for Max Pain mean (calendar days)
 
 hmm:
-  n_components: [2, 3, 4]     # regime count search space
+  n_components: [5]           # fixed: Strong Bearish / Bearish / Neutral / Bullish / Strong Bullish
   n_splits: 5                 # TimeSeriesSplit folds
-  n_trials: 100               # Optuna trials
+  n_trials: 200               # Optuna trials
   random_state: 42            # seed for GaussianHMM and Optuna TPESampler
   covariance_type: full       # hmmlearn covariance type (full/diag/tied/spherical)
   n_iter: 200                 # max EM iterations per fit

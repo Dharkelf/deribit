@@ -24,6 +24,7 @@ Study caching: fitted Optuna study persisted as pickle next to model artefacts.
 top_n_results() extracts the N best *distinct* feature-set + n_components combos.
 """
 
+import json
 import logging
 import pickle
 from pathlib import Path
@@ -42,13 +43,15 @@ logger = logging.getLogger(__name__)
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-_STUDY_FILENAME = "optuna_study.pkl"
+_STUDY_FILENAME        = "optuna_study.pkl"
+_BEST_FEATURES_FILENAME = "best_features.json"
 
 # SOL_log_return is always included — never toggled by Optuna
 _OPTIONAL_FEATURES: list[str] = [f for f in ALL_FEATURE_NAMES if f != "SOL_log_return"]
 
-# Minimum fraction each state must occupy to be considered a valid model
-_MIN_STATE_FRACTION = 0.05
+# Lowered from 0.05 → 0.02 to support k=5 without excessive pruning.
+# Each state still needs ≥2% of training rows (≈170 rows on 8500-row dataset).
+_MIN_STATE_FRACTION = 0.02
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +75,37 @@ def load_study(config: dict) -> optuna.Study | None:
         study: optuna.Study = pickle.load(f)
     logger.info("Optuna study loaded ← %s  (%d trials)", path, len(study.trials))
     return study
+
+
+def save_best_features(study: optuna.Study, config: dict) -> Path:
+    """Persist best feature config to JSON for downstream models (XGB, Prophet)."""
+    best = top_n_results(study, n=1)[0]
+    path = models_dir(config) / _BEST_FEATURES_FILENAME
+    payload = {
+        "n_components":   best["n_components"],
+        "feature_subset": best["feature_subset"],
+        "score":          best["score"],
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+    logger.info(
+        "Best features saved → %s  (k=%d, %d optional features, score=%.4f)",
+        path, payload["n_components"], len(payload["feature_subset"]), payload["score"],
+    )
+    return path
+
+
+def load_best_features(config: dict) -> dict | None:
+    path = models_dir(config) / _BEST_FEATURES_FILENAME
+    if not path.exists():
+        return None
+    with open(path) as f:
+        payload: dict = json.load(f)
+    logger.info(
+        "Best features loaded ← %s  (k=%d, %d optional features)",
+        path, payload["n_components"], len(payload["feature_subset"]),
+    )
+    return payload
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -277,7 +311,7 @@ def run_optimization(
 
     objective = _build_objective(config, df_common)
     logger.info("Starting Optuna optimisation: %d trials …", n_trials)
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     logger.info(
         "Best trial: score=%.4f  n_components=%d  n_features=%d",
@@ -287,6 +321,7 @@ def run_optimization(
     )
 
     save_study(study, config)
+    save_best_features(study, config)
     return study
 
 

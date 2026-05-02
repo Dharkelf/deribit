@@ -143,25 +143,26 @@ def test_military_passthrough() -> None:
     pd.testing.assert_series_equal(df["GDELT_military_score"], original)
 
 
-def test_max_pain_diff_computed() -> None:
+def test_max_pain_ratio_computed() -> None:
     rng = np.random.default_rng(0)
     df = _make_common_df()
     df["BTC_options_max_pain_7d"] = df["BTC_close"] * rng.uniform(0.9, 1.1, len(df))
     df = MaxPainExtractor().transform(df)
-    assert "max_pain_diff_usd" in df.columns
+    assert "max_pain_ratio" in df.columns
     assert "max_pain_diff_pct" in df.columns
-    assert "max_pain_7d_diff_usd" in df.columns
+    assert "max_pain_7d_ratio" in df.columns
     assert "max_pain_7d_diff_pct" in df.columns
-    assert not (df["max_pain_diff_usd"] == 0.0).all()
-    assert not (df["max_pain_7d_diff_usd"] == 0.0).all()
+    # ratio = max_pain / BTC_close — should vary around 0.8–1.2 given fixture
+    assert df["max_pain_ratio"].dropna().between(0.5, 2.0).all()
+    assert df["max_pain_7d_ratio"].dropna().between(0.5, 2.0).all()
 
 
 def test_max_pain_nan_when_column_missing() -> None:
     df = _make_common_df(with_max_pain=False)
     df = MaxPainExtractor().transform(df)
-    assert df["max_pain_diff_usd"].isna().all()
+    assert df["max_pain_ratio"].isna().all()
     assert df["max_pain_diff_pct"].isna().all()
-    assert df["max_pain_7d_diff_usd"].isna().all()
+    assert df["max_pain_7d_ratio"].isna().all()
     assert df["max_pain_7d_diff_pct"].isna().all()
 
 

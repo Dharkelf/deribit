@@ -392,36 +392,39 @@ class MarketCloseExtractor(FeatureExtractor):
 
 
 class MaxPainExtractor(FeatureExtractor):
-    """BTC Options Max Pain features — distance from BTC price to pain level.
+    """BTC Options Max Pain features — normalised by current BTC price.
 
     Two windows computed in one daily Deribit API call:
       30d window: mean max pain across all expiries in the next 30 days
       7d  window: mean max pain across all expiries in the next 7 days
 
-    All four features express the gravitational pull as signed USD and
-    percentage distance from the current BTC close. Forward-filled hourly.
+    max_pain_ratio / max_pain_7d_ratio express the gravitational level as
+    a fraction of the current BTC close (e.g. 1.067 = pain 6.7 % above price).
+    Normalising by price makes the feature scale-invariant across BTC levels.
+    max_pain_diff_pct / max_pain_7d_diff_pct are day-over-day pct changes of
+    the pain level itself. Forward-filled hourly.
     """
 
     @property
     def feature_names(self) -> list[str]:
         return [
-            "max_pain_diff_usd", "max_pain_diff_pct",
-            "max_pain_7d_diff_usd", "max_pain_7d_diff_pct",
+            "max_pain_ratio", "max_pain_diff_pct",
+            "max_pain_7d_ratio", "max_pain_7d_diff_pct",
         ]
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         btc = df["BTC_close"]
-        for col, usd_out, pct_out in [
-            ("BTC_options_max_pain",    "max_pain_diff_usd",    "max_pain_diff_pct"),
-            ("BTC_options_max_pain_7d", "max_pain_7d_diff_usd", "max_pain_7d_diff_pct"),
+        for col, ratio_out, pct_out in [
+            ("BTC_options_max_pain",    "max_pain_ratio",    "max_pain_diff_pct"),
+            ("BTC_options_max_pain_7d", "max_pain_7d_ratio", "max_pain_7d_diff_pct"),
         ]:
             if col not in df.columns:
-                df[usd_out] = np.nan
-                df[pct_out] = np.nan
+                df[ratio_out] = np.nan
+                df[pct_out]   = np.nan
             else:
                 mp = df[col]
-                df[usd_out] = mp - btc
-                df[pct_out] = (mp - btc) / btc
+                df[ratio_out] = mp / btc
+                df[pct_out]   = mp.pct_change(fill_method=None)
         return df
 
 
