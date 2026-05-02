@@ -27,7 +27,7 @@ class ParquetRepository:
         path = self._path(symbol)
         if not path.exists():
             return None
-        df = pd.read_parquet(path, columns=["close"])  # minimal read
+        df = pd.read_parquet(path)
         return df.index.max() if not df.empty else None
 
     def load(self, symbol: str) -> pd.DataFrame:
