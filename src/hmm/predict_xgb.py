@@ -367,7 +367,7 @@ def run(config: dict, *, force: bool = False) -> dict:
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
     # ── Align to yesterday 23:00 UTC so forecast starts at today 00:00 UTC ──
-    cutoff = _yesterday_end()
+    cutoff = config.get("_cutoff", _yesterday_end())
     if X_df.index[-1] > cutoff:
         X_df      = X_df.loc[X_df.index <= cutoff]
         sol_close = sol_close.loc[sol_close.index <= cutoff]
@@ -405,7 +405,7 @@ def run(config: dict, *, force: bool = False) -> dict:
     future_ts_full, xgb_exp_full, xgb_lo_full, xgb_hi_full = _recursive_forecast(
         base_model, q10_model, q90_model, X_df, sol_close
     )
-    _today_midnight = pd.Timestamp.now(tz="UTC").normalize()
+    _today_midnight = config.get("_today", pd.Timestamp.now(tz="UTC").normalize())
     _today_end      = _today_midnight + pd.Timedelta(hours=23)
     _day_mask = (future_ts_full >= _today_midnight) & (future_ts_full <= _today_end)
     if _day_mask.any():

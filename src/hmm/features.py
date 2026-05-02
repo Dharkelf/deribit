@@ -10,10 +10,10 @@ which makes the series stationary (removes price-level non-stationarity).
 
 Common DataFrame
 ----------------
-Built by load_common_dataframe(): inner-joins BTC/ETH/SOL/VIX on UTC timestamp,
-then reindexes to a complete 24-hour hourly grid and forward-fills gaps
-(VIX weekends, FEMA/GDELT daily data). FEMA and GDELT are joined as soft
-[0, 1] float signals.
+Built by load_common_dataframe(): inner-joins BTC/ETH/SOL on UTC timestamp
+(24/7 crypto sets the authoritative time range), then reindexes to a complete
+hourly UTC grid. VIX is left-joined via reindex+ffill so its NYSE-only schedule
+does not truncate crypto data. FEMA and GDELT are joined as soft [0, 1] signals.
 
 Available feature groups
 -------------------------
@@ -42,7 +42,8 @@ from src.utils.paths import raw_dir
 
 logger = logging.getLogger(__name__)
 
-_SYMBOLS = ["BTC", "ETH", "SOL", "VIX"]
+_SYMBOLS       = ["BTC", "ETH", "SOL", "VIX"]
+_PRICE_SYMBOLS = ["BTC", "ETH", "SOL"]   # 24/7 crypto — inner-joined
 _SHORT_WINDOW = 24    # 1 day in hours
 _LONG_WINDOW = 168    # 1 week in hours
 
@@ -55,19 +56,20 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     """Load all Parquet files and produce a complete 24-hour UTC hourly DataFrame.
 
     Steps:
-      1. Load BTC, ETH, SOL, VIX — inner-join on timestamp.
-      2. Reindex to a complete hourly UTC grid; forward-fill all gaps
-         (VIX weekends/holidays, FEMA/GDELT daily → hourly expansion).
-      3. Join FEMA and GDELT as daily soft signals (forward-filled to hourly).
+      1. Inner-join BTC/ETH/SOL (24/7 crypto) on timestamp — sets the time range.
+      2. Reindex to a complete hourly UTC grid; forward-fill intraday gaps.
+      3. Left-join VIX by reindex+ffill (VIX only trades NYSE hours, weekdays).
+         This avoids inner-join truncating crypto data to VIX's sparse schedule.
+      4. Join FEMA and GDELT as daily soft signals (forward-filled to hourly).
 
     Raises FileNotFoundError if a core symbol file (BTC/ETH/SOL/VIX) is missing.
     FEMA and GDELT are optional — missing files produce a zero-filled column.
     """
     rd = raw_dir(config)
 
-    # --- Core OHLCV symbols ---
+    # --- 24/7 crypto symbols — inner-join to set the authoritative time range ---
     frames: list[pd.DataFrame] = []
-    for symbol in _SYMBOLS:
+    for symbol in _PRICE_SYMBOLS:
         path: Path = rd / f"{symbol}.parquet"
         if not path.exists():
             raise FileNotFoundError(
@@ -80,7 +82,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
 
     combined = pd.concat(frames, axis=1, join="inner")
 
-    # Complete 24-hour hourly UTC grid — forward-fill all gaps
+    # Complete 24-hour hourly UTC grid — forward-fill intraday gaps
     full_index = pd.date_range(
         start=combined.index.min(),
         end=combined.index.max(),
@@ -89,6 +91,18 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     )
     full_index.name = "timestamp"
     combined = combined.reindex(full_index).ffill()
+
+    # --- VIX — left-join so NYSE-only schedule doesn't truncate crypto data ---
+    vix_path: Path = rd / "VIX.parquet"
+    if not vix_path.exists():
+        raise FileNotFoundError(
+            f"Missing Parquet for VIX at {vix_path}. "
+            "Run 'python main.py collect' first."
+        )
+    vix_df = pd.read_parquet(vix_path)
+    vix_df.columns = [f"VIX_{col}" for col in vix_df.columns]
+    for col in vix_df.columns:
+        combined[col] = vix_df[col].reindex(full_index).ffill()
 
     # --- Soft signals (optional) ---
     # FEMA/GDELT: 0 = neutral/no activity — safe fallback

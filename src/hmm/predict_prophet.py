@@ -149,6 +149,7 @@ def _extract_forecast(
     np_df: pd.DataFrame,
     sol_close: pd.Series,
     tz: str = "UTC",
+    today_midnight: pd.Timestamp | None = None,
 ) -> tuple[pd.DatetimeIndex, np.ndarray, np.ndarray, np.ndarray,
            pd.DatetimeIndex, np.ndarray, np.ndarray, float]:
     """Split forecast into in-data (historic) and future portions.
@@ -177,7 +178,7 @@ def _extract_forecast(
     hi_cols.sort(key=lambda c: int(c.split("yhat")[1].split(" ")[0]))
 
     # In-data: use yhat1 from each historic row
-    in_data_pred = hist["yhat1"].fillna(method="ffill").values.astype(float)
+    in_data_pred = hist["yhat1"].ffill().values.astype(float)
 
     # Future: yhat_i from the last in-data origin → last_known_ds + i*1h.
     # Build step timestamps; filter to today's full UTC calendar day.
@@ -188,7 +189,8 @@ def _extract_forecast(
         periods=n_steps, freq="1h",
     )  # tz-naive, matching NP convention
 
-    today_midnight_naive = pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+    _tm = today_midnight if today_midnight is not None else pd.Timestamp.now(tz="UTC").normalize()
+    today_midnight_naive = _tm.tz_localize(None) if _tm.tzinfo is not None else _tm
     today_end_naive      = today_midnight_naive + pd.Timedelta(hours=23)
     today_mask           = (all_step_ts >= today_midnight_naive) & (all_step_ts <= today_end_naive)
     today_idx            = np.where(today_mask)[0]
@@ -252,8 +254,8 @@ def run(config: dict) -> dict:
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
     # ── Align to yesterday 23:00 UTC so forecast starts at today 00:00 UTC ──
-    today_midnight = pd.Timestamp.now(tz="UTC").normalize()
-    cutoff = today_midnight - pd.Timedelta(hours=1)
+    today_midnight = config.get("_today", pd.Timestamp.now(tz="UTC").normalize())
+    cutoff         = config.get("_cutoff", today_midnight - pd.Timedelta(hours=1))
     if X_df.index[-1] > cutoff:
         X_df      = X_df.loc[X_df.index <= cutoff]
         sol_close = sol_close.loc[sol_close.index <= cutoff]
@@ -280,7 +282,7 @@ def run(config: dict) -> dict:
     (
         in_data_ts, in_data_pred, in_data_actual, in_data_rmse,
         future_ts, np_exp, np_lo, np_hi,
-    ) = _extract_forecast(forecast, np_df, sol_close)
+    ) = _extract_forecast(forecast, np_df, sol_close, today_midnight=today_midnight)
 
     logger.info(
         "NP forecast: last=$%.2f  E[+7d]=$%.2f  CI=[$%.2f, $%.2f]  in-data RMSE=$%.2f",

@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 
+import pandas as pd
 import yaml
 
 
@@ -32,6 +33,12 @@ def main() -> None:
 
     config = _load_config()
     _setup_logging(config.get("logging", {}).get("level", "INFO"))
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    config["_now_utc"]   = now_utc
+    config["_today"]     = now_utc.normalize()                              # today 00:00 UTC
+    config["_cutoff"]    = now_utc.normalize() - pd.Timedelta(hours=1)     # yesterday 23:00 UTC
+    config["_last_hour"] = now_utc.floor("h")                              # last full hour
 
     run_collect = args.command in (None, "collect")
     run_hmm = args.command in (None, "hmm")

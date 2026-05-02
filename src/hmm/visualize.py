@@ -263,9 +263,11 @@ def _draw_two_week_panel(
     plus_in_ts: pd.DatetimeIndex | None = None,
     plus_rmse: float | None = None,
     plus_features: list[str] | None = None,
+    today_midnight: pd.Timestamp | None = None,
 ) -> None:
     """Draw the 3-day history + today 00:00–23:00 forecast panel."""
     today = in_data_ts[-1]
+    _today_midnight = today_midnight if today_midnight is not None else pd.Timestamp.now(tz="UTC").normalize()
 
     # Actual prices: prefer SOL.parquet series (continuous, no VIX-join gaps)
     if today_actual is not None and today_actual_ts is not None and len(today_actual) > 0:
@@ -322,10 +324,9 @@ def _draw_two_week_panel(
         )
 
     # Fix x-axis: 3 full calendar days back (midnight) → today 23:00 UTC
-    _now_midnight = pd.Timestamp.now(tz="UTC").normalize()
     ax.set_xlim(
-        _now_midnight - pd.Timedelta(days=3),
-        _now_midnight + pd.Timedelta(hours=23),
+        _today_midnight - pd.Timedelta(days=3),
+        _today_midnight + pd.Timedelta(hours=23),
     )
 
     # Legend
@@ -368,7 +369,7 @@ def main() -> None:
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
     # Align to yesterday 23:00 UTC — HMM forecast starts at today 00:00 UTC
-    _cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1)
+    _cutoff = config.get("_cutoff", pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1))
     if X_df.index[-1] > _cutoff:
         X_df      = X_df.loc[X_df.index <= _cutoff]
         sol_close = sol_close.loc[sol_close.index <= _cutoff]
@@ -404,8 +405,13 @@ def main() -> None:
         _sol_full = pd.read_parquet(_sol_par)
         if _sol_full.index.tz is None:
             _sol_full.index = _sol_full.index.tz_localize("UTC")
-        _window_start = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=3)
-        _recent_sol   = _sol_full.loc[_sol_full.index >= _window_start, "close"]
+        _now_today    = config.get("_today", pd.Timestamp.now(tz="UTC").normalize())
+        _last_hour    = config.get("_last_hour", pd.Timestamp.now(tz="UTC").floor("h"))
+        _window_start = _now_today - pd.Timedelta(days=3)
+        _recent_sol   = _sol_full.loc[
+            (_sol_full.index >= _window_start) & (_sol_full.index <= _last_hour),
+            "close",
+        ]
         if not _recent_sol.empty:
             _today_actual_ts = _recent_sol.index
             _today_actual    = _recent_sol.values.astype(float)
@@ -475,6 +481,7 @@ def main() -> None:
     )
 
     # ── Panel 2: XGBoost ──────────────────────────────────────────────────────
+    _today_midnight = config.get("_today", pd.Timestamp.now(tz="UTC").normalize())
     _style_ax(ax2, hourly=True)
     xgb_features = xgb_results.get("feature_names", subset)
     _draw_two_week_panel(
@@ -499,6 +506,7 @@ def main() -> None:
         plus_in_ts      = xgb_results.get("xgb_plus_in_ts"),
         plus_rmse       = xgb_results.get("xgb_plus_rmse"),
         plus_features   = xgb_results.get("plus_features"),
+        today_midnight  = _today_midnight,
     )
     ax2.set_title(
         f"XGBoost recursive forecast  |  E[+24h]: ${xgb_results['xgb_exp'][-1]:.2f}"
@@ -527,6 +535,7 @@ def main() -> None:
         feature_names   = subset,
         today_actual_ts = _today_actual_ts,
         today_actual    = _today_actual,
+        today_midnight  = _today_midnight,
     )
     ax3.set_title(
         f"NeuralProphet direct forecast  |  E[+24h]: ${np_r['np_exp'][-1]:.2f}"
