@@ -401,16 +401,25 @@ def run(config: dict, *, force: bool = False) -> dict:
     )
     logger.info("In-data RMSE (last %d h): $%.2f", _INDATA_HOURS, in_data_rmse)
 
-    # ── Recursive forecast — full 168 steps, display trimmed to 24 h ─────────
+    # ── Recursive forecast — full 168 steps, display = today 00:00–23:00 UTC ─
     future_ts_full, xgb_exp_full, xgb_lo_full, xgb_hi_full = _recursive_forecast(
         base_model, q10_model, q90_model, X_df, sol_close
     )
-    future_ts = future_ts_full[:_DISPLAY_HOURS]
-    xgb_exp   = xgb_exp_full[:_DISPLAY_HOURS]
-    xgb_lo    = xgb_lo_full[:_DISPLAY_HOURS]
-    xgb_hi    = xgb_hi_full[:_DISPLAY_HOURS]
+    _today_midnight = pd.Timestamp.now(tz="UTC").normalize()
+    _today_end      = _today_midnight + pd.Timedelta(hours=23)
+    _day_mask = (future_ts_full >= _today_midnight) & (future_ts_full <= _today_end)
+    if _day_mask.any():
+        future_ts = future_ts_full[_day_mask]
+        xgb_exp   = xgb_exp_full[_day_mask]
+        xgb_lo    = xgb_lo_full[_day_mask]
+        xgb_hi    = xgb_hi_full[_day_mask]
+    else:
+        future_ts = future_ts_full[:_DISPLAY_HOURS]
+        xgb_exp   = xgb_exp_full[:_DISPLAY_HOURS]
+        xgb_lo    = xgb_lo_full[:_DISPLAY_HOURS]
+        xgb_hi    = xgb_hi_full[:_DISPLAY_HOURS]
     logger.info(
-        "XGB forecast: last=$%.2f  E[+24h]=$%.2f  CI=[$%.2f, $%.2f]",
+        "XGB forecast: last=$%.2f  E[today 23:00]=$%.2f  CI=[$%.2f, $%.2f]",
         float(sol_close.iloc[-1]), xgb_exp[-1], xgb_lo[-1], xgb_hi[-1],
     )
 
@@ -455,7 +464,8 @@ def run(config: dict, *, force: bool = False) -> dict:
         _fts, _exp, _, _ = _recursive_forecast(
             plus_model, plus_q10, plus_q90, X_plus, sol_plus
         )
-        xgb_plus_exp = _exp[:_DISPLAY_HOURS]
+        _plus_mask   = (_fts >= _today_midnight) & (_fts <= _today_end)
+        xgb_plus_exp = _exp[_plus_mask] if _plus_mask.any() else _exp[:_DISPLAY_HOURS]
         xgb_plus_in_ts, xgb_plus_in_pred, _, xgb_plus_rmse = _in_data_predict(
             plus_model, X_plus, sol_plus, window=_INDATA_HOURS
         )

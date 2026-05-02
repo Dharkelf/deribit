@@ -48,9 +48,9 @@ from src.hmm.optimizer import load_best_features
 
 logger = logging.getLogger(__name__)
 
-_FORECAST_HOURS   = 24        # direct 24h prediction; avoids recursive error accumulation
+_FORECAST_HOURS   = 48        # 2-day buffer; today's 24h extracted by UTC mask
 _INDATA_HOURS     = 72        # in-data window shown in plot (last 3 days)
-_NP_TRAIN_WINDOW  = 4000      # ~167 days; safe on M5 16 GB with n_forecasts=24
+_NP_TRAIN_WINDOW  = 4000      # ~167 days; safe on M5 16 GB with n_forecasts=48
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,19 +160,14 @@ def _extract_forecast(
     """
     last_known_ds = np_df["ds"].iloc[-1]
 
-    # Historic (in-data) window — last 72 h; future — next 24 h
+    # Historic in-data window (last 72 h before last_known_ds)
     hist = forecast[forecast["ds"] <= last_known_ds].tail(_INDATA_HOURS).copy()
-    fut  = forecast[forecast["ds"] >  last_known_ds].head(_FORECAST_HOURS).copy()
 
     def _to_utc(ds_series: pd.Series) -> pd.DatetimeIndex:
         return pd.DatetimeIndex(pd.to_datetime(ds_series)).tz_localize(tz)
 
     in_data_ts = _to_utc(hist["ds"])
-    future_ts  = _to_utc(fut["ds"])
 
-    # NeuralProphet multi-step: for in-data rows use yhat1 (1-step-ahead)
-    # For future rows, stitch yhat1 … yhat168 from the last in-data origin
-    # (NeuralProphet stores them as columns yhat1 … yhatN).
     yhat_cols = [c for c in forecast.columns if c.startswith("yhat") and c[4:].isdigit()]
     yhat_cols.sort(key=lambda c: int(c[4:]))
 
@@ -184,17 +179,31 @@ def _extract_forecast(
     # In-data: use yhat1 from each historic row
     in_data_pred = hist["yhat1"].fillna(method="ffill").values.astype(float)
 
-    # Future: from the last historic row, read yhat1 … yhat168
+    # Future: yhat_i from the last in-data origin → last_known_ds + i*1h.
+    # Build step timestamps; filter to today's full UTC calendar day.
     last_hist_row = forecast[forecast["ds"] == last_known_ds]
-    if last_hist_row.empty or not yhat_cols:
-        np_exp = np.full(_FORECAST_HOURS, np.nan)
-        np_lo  = np_exp.copy()
-        np_hi  = np_exp.copy()
+    n_steps = len(yhat_cols)
+    all_step_ts = pd.date_range(
+        start=pd.Timestamp(last_known_ds) + pd.Timedelta(hours=1),
+        periods=n_steps, freq="1h",
+    )  # tz-naive, matching NP convention
+
+    today_midnight_naive = pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+    today_end_naive      = today_midnight_naive + pd.Timedelta(hours=23)
+    today_mask           = (all_step_ts >= today_midnight_naive) & (all_step_ts <= today_end_naive)
+    today_idx            = np.where(today_mask)[0]
+
+    if len(today_idx) == 0 or last_hist_row.empty or not yhat_cols:
+        np_exp    = np.full(24, np.nan)
+        np_lo     = np_exp.copy()
+        np_hi     = np_exp.copy()
+        future_ts = pd.DatetimeIndex([], tz=tz)
     else:
-        row    = last_hist_row.iloc[0]
-        np_exp = np.array([row.get(c, np.nan) for c in yhat_cols[:_FORECAST_HOURS]], dtype=float)
-        np_lo  = np.array([row.get(c, np.nan) for c in lo_cols[:_FORECAST_HOURS]],   dtype=float) if lo_cols else np_exp.copy()
-        np_hi  = np.array([row.get(c, np.nan) for c in hi_cols[:_FORECAST_HOURS]],   dtype=float) if hi_cols else np_exp.copy()
+        row       = last_hist_row.iloc[0]
+        np_exp    = np.array([row.get(yhat_cols[i], np.nan) for i in today_idx], dtype=float)
+        np_lo     = np.array([row.get(lo_cols[i],   np.nan) for i in today_idx], dtype=float) if lo_cols else np_exp.copy()
+        np_hi     = np.array([row.get(hi_cols[i],   np.nan) for i in today_idx], dtype=float) if hi_cols else np_exp.copy()
+        future_ts = pd.DatetimeIndex(all_step_ts[today_mask]).tz_localize(tz)
 
     # Actual prices for RMSE (align to in_data_ts)
     actual = sol_close.reindex(in_data_ts)

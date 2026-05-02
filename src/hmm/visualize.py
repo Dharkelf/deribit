@@ -38,6 +38,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from src.utils.paths import raw_dir
+
 warnings.filterwarnings("ignore")
 
 _ROOT        = Path(__file__).resolve().parents[2]
@@ -254,13 +256,15 @@ def _draw_two_week_panel(
     forecast_label: str,
     current_regime: str | None = None,
     feature_names: list[str] | None = None,
+    today_actual_ts: pd.DatetimeIndex | None = None,
+    today_actual: np.ndarray | None = None,
     plus_exp: np.ndarray | None = None,
     plus_in_pred: np.ndarray | None = None,
     plus_in_ts: pd.DatetimeIndex | None = None,
     plus_rmse: float | None = None,
     plus_features: list[str] | None = None,
 ) -> None:
-    """Draw the 3-day history + 24h forecast panel."""
+    """Draw the 3-day history + today 00:00–23:00 forecast panel."""
     today = in_data_ts[-1]
 
     # Actual prices (last 72 h)
@@ -296,6 +300,13 @@ def _draw_two_week_panel(
         ax.plot(future_ts, plus_exp,
                 color=_XGB_PLUS_COLOR, linewidth=2.0, linestyle="-", zorder=5,
                 label=f"{in_data_label}+ E[+24h]=${plus_exp[-1]:.2f}  (+{feat_str}…)")
+
+    # Today's intraday actual prices (from SOL.parquet, overlaid on forecast)
+    if today_actual is not None and today_actual_ts is not None and len(today_actual) > 0:
+        last_t = today_actual_ts[-1].strftime("%H:%M")
+        ax.plot(today_actual_ts, today_actual,
+                color=_SOL_COLOR, linewidth=2.0, zorder=7,
+                label=f"SOL/USD heute Istwert (bis {last_t} UTC)")
 
     # Regime + feature annotation (top-right)
     if current_regime is not None:
@@ -377,6 +388,26 @@ def main() -> None:
         sol_last, exp_price_hmm[-1], lo_price_hmm[-1], hi_price_hmm[-1],
     )
 
+    # ── Today's intraday SOL actual prices (independent of common DataFrame) ──
+    _sol_par = raw_dir(config) / "SOL.parquet"
+    _today_actual_ts: pd.DatetimeIndex | None = None
+    _today_actual: np.ndarray | None = None
+    if _sol_par.exists():
+        _sol_full = pd.read_parquet(_sol_par)
+        if _sol_full.index.tz is None:
+            _sol_full.index = _sol_full.index.tz_localize("UTC")
+        _today_midnight = pd.Timestamp.now(tz="UTC").normalize()
+        _today_sol = _sol_full.loc[_sol_full.index >= _today_midnight, "close"]
+        if not _today_sol.empty:
+            _today_actual_ts = _today_sol.index
+            _today_actual    = _today_sol.values.astype(float)
+            logger.info(
+                "Today's actual SOL: %d rows (%s – %s UTC)",
+                len(_today_actual),
+                _today_actual_ts[0].strftime("%H:%M"),
+                _today_actual_ts[-1].strftime("%H:%M"),
+            )
+
     # ── XGBoost pipeline ──────────────────────────────────────────────────────
     from src.hmm.predict_xgb import run as run_xgb
     xgb_results = run_xgb(config)
@@ -453,6 +484,8 @@ def main() -> None:
         forecast_label  = "XGBoost",
         current_regime  = current_regime_label,
         feature_names   = xgb_features,
+        today_actual_ts = _today_actual_ts,
+        today_actual    = _today_actual,
         plus_exp        = xgb_results.get("xgb_plus_exp"),
         plus_in_pred    = xgb_results.get("xgb_plus_in_pred"),
         plus_in_ts      = xgb_results.get("xgb_plus_in_ts"),
@@ -484,6 +517,8 @@ def main() -> None:
         forecast_label  = "NeuralProphet",
         current_regime  = current_regime_label,
         feature_names   = subset,
+        today_actual_ts = _today_actual_ts,
+        today_actual    = _today_actual,
     )
     ax3.set_title(
         f"NeuralProphet direct forecast  |  E[+24h]: ${np_r['np_exp'][-1]:.2f}"
