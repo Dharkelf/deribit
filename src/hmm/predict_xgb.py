@@ -237,41 +237,63 @@ def _in_data_predict(
 
 
 def _find_plus_features(
-    X_df_full: pd.DataFrame,
-    sol_close_full: pd.Series,
+    df_common: pd.DataFrame,
+    sol_close: pd.Series,
     base_subset: list[str],
+    viable_all: list[str],
     base_rmse: float,
     n_extra: int = 3,
+    min_rows: int = 200,
 ) -> list[str]:
     """Find top n_extra optional features not in base_subset by in-data RMSE gain.
 
+    Each candidate is evaluated independently: builds its own feature matrix
+    (base_subset + candidate) and calls dropna(). This avoids the joint-matrix
+    trap where one sparse feature (e.g. Max Pain) collapses every other
+    candidate to the same short window.
+
     Uses a quick 100-tree model per candidate; only features with positive
-    RMSE improvement are kept.
+    RMSE improvement over the base model are kept.
     """
-    # Candidates: viable features not already in the base model
-    candidates = [
-        f for f in X_df_full.columns
-        if f not in base_subset and f != "SOL_log_return"
-    ]
+    candidates = [f for f in viable_all if f not in base_subset and f != "SOL_log_return"]
     if not candidates:
         logger.info("XGB+: no candidate features available")
         return []
 
-    logger.info("XGB+ searching %d candidate features (base RMSE=%.4f) …", len(candidates), base_rmse)
+    # Build a 100-tree baseline on the base subset for fair apples-to-apples
+    # comparison (the full base_rmse uses 800 trees, which always beats 100).
+    try:
+        X_base = build_feature_matrix(df_common.copy(), list(base_subset))
+    except ValueError:
+        logger.info("XGB+: could not build base matrix — skipping")
+        return []
+    sol_base = sol_close.reindex(X_base.index)
+    X_tr_b, y_tr_b = _build_train_data(X_base, sol_base)
+    m_base = _train_model(X_tr_b, y_tr_b, n_estimators=100)
+    _, _, _, quick_base_rmse = _in_data_predict(m_base, X_base, sol_base)
+
+    logger.info(
+        "XGB+ searching %d candidate features (quick base RMSE=%.4f, full base=%.4f) …",
+        len(candidates), quick_base_rmse, base_rmse,
+    )
     improvements: list[tuple[float, str]] = []
 
     for feat in candidates:
-        cols  = ["SOL_log_return"] + [f for f in base_subset if f in X_df_full.columns] + [feat]
-        X_sub = X_df_full[cols].dropna()
-        if len(X_sub) < 200:
+        trial_subset = list(base_subset) + [feat]
+        try:
+            X_sub = build_feature_matrix(df_common.copy(), trial_subset)
+        except ValueError:
             continue
-        sol_sub = sol_close_full.reindex(X_sub.index)
+        if len(X_sub) < min_rows:
+            logger.debug("  skip %-35s — %d rows < %d", feat, len(X_sub), min_rows)
+            continue
+        sol_sub = sol_close.reindex(X_sub.index)
         X_tr, y_tr = _build_train_data(X_sub, sol_sub)
         m = _train_model(X_tr, y_tr, n_estimators=100)
         _, _, _, rmse = _in_data_predict(m, X_sub, sol_sub)
-        delta = base_rmse - rmse
+        delta = quick_base_rmse - rmse
         improvements.append((delta, feat))
-        logger.debug("  + %-35s  Δ=%.4f", feat, delta)
+        logger.debug("  + %-35s  Δ=%.4f  rows=%d", feat, delta, len(X_sub))
 
     improvements.sort(reverse=True)
     top = [f for delta, f in improvements[:n_extra] if delta > 0]
@@ -424,9 +446,7 @@ def run(config: dict, *, force: bool = False) -> dict:
     )
 
     # ── XGBoost+ ──────────────────────────────────────────────────────────────
-    viable_all     = _viable_optional_features(df_common)
-    X_df_full      = build_feature_matrix(df_common.copy(), viable_all)
-    sol_close_full = df_common["SOL_close"].reindex(X_df_full.index)
+    viable_all = _viable_optional_features(df_common)
 
     stale_plus  = _cache_is_stale(config, _XGB_PLUS_MODEL_FILENAME)
     cached_plus = None if (force or stale_plus) else _load_models(config, _XGB_PLUS_MODEL_FILENAME)
@@ -436,8 +456,9 @@ def run(config: dict, *, force: bool = False) -> dict:
         plus_model, plus_q10, plus_q90, plus_features = cached_plus
         logger.info("XGB+ models loaded from cache (features: %s)", plus_features)
     else:
+        df_common_capped = df_common.loc[df_common.index <= cutoff]
         plus_features = _find_plus_features(
-            X_df_full, sol_close_full, feature_subset, in_data_rmse
+            df_common_capped, sol_close, feature_subset, viable_all, in_data_rmse
         )
         if plus_features:
             plus_subset = feature_subset + plus_features
