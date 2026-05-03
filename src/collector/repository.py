@@ -27,7 +27,7 @@ class ParquetRepository:
         path = self._path(symbol)
         if not path.exists():
             return None
-        df = pd.read_parquet(path)
+        df = pd.read_parquet(path, engine="pyarrow")
         return df.index.max() if not df.empty else None
 
     def load(self, symbol: str) -> pd.DataFrame:
@@ -35,7 +35,7 @@ class ParquetRepository:
         path = self._path(symbol)
         if not path.exists():
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return pd.read_parquet(path)
+        return pd.read_parquet(path, engine="pyarrow")
 
     def save_sample(self, symbol: str, n: int = 10) -> None:
         """Write *n* random rows from the stored Parquet to data/raw/samples/<symbol>.csv.
@@ -64,12 +64,12 @@ class ParquetRepository:
 
         path = self._path(symbol)
         if path.exists():
-            existing = pd.read_parquet(path)
+            existing = pd.read_parquet(path, engine="pyarrow")
             combined = pd.concat([existing, df])
         else:
             combined = df.copy()
 
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
         combined.index.name = "timestamp"
-        combined.to_parquet(path)
+        combined.to_parquet(path, engine="pyarrow")
         logger.info("Saved %d rows for %s → %s", len(combined), symbol, path.name)

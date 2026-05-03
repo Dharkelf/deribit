@@ -49,6 +49,13 @@ _BEST_FEATURES_FILENAME = "best_features.json"
 # SOL_log_return is always included — never toggled by Optuna
 _OPTIONAL_FEATURES: list[str] = [f for f in ALL_FEATURE_NAMES if f != "SOL_log_return"]
 
+# Max Pain is options-expiry-based (not daily) → sparse coverage is expected.
+# Include if at least 1 non-NaN row exists; do not apply the 50% threshold.
+_SPARSE_OK_FEATURES: frozenset[str] = frozenset({
+    "max_pain_ratio", "max_pain_diff_pct",
+    "max_pain_7d_ratio", "max_pain_7d_diff_pct",
+})
+
 # Lowered from 0.05 → 0.02 to support k=5 without excessive pruning.
 # Each state still needs ≥2% of training rows (≈170 rows on 8500-row dataset).
 _MIN_STATE_FRACTION = 0.02
@@ -195,24 +202,28 @@ def _selection_score(
 
 
 def _viable_optional_features(df_common: pd.DataFrame) -> list[str]:
-    """Return optional features with ≥50% non-NaN coverage in df_common.
+    """Return optional features with sufficient non-NaN coverage in df_common.
 
-    Runs all extractors once and checks NaN share per column. Features from
-    sources not yet collected (e.g. Max Pain) would produce 100% NaN and are
-    excluded so Optuna never wastes trials on them.
+    General rule: ≥50% non-NaN rows required.
+    Exception: features in _SPARSE_OK_FEATURES (Max Pain) only need ≥1 non-NaN
+    row — they are options-expiry-based and naturally sparse.
     """
     df = df_common.copy()
     for ext in ALL_EXTRACTORS:
         df = ext.transform(df)
 
-    viable = [
-        f for f in _OPTIONAL_FEATURES
-        if f in df.columns and df[f].notna().mean() >= 0.5
-    ]
+    def _ok(f: str) -> bool:
+        if f not in df.columns:
+            return False
+        if f in _SPARSE_OK_FEATURES:
+            return df[f].notna().any()
+        return df[f].notna().mean() >= 0.5
+
+    viable = [f for f in _OPTIONAL_FEATURES if _ok(f)]
     excluded = set(_OPTIONAL_FEATURES) - set(viable)
     if excluded:
         logger.info(
-            "Excluded %d features with <50%% coverage: %s",
+            "Excluded %d features with insufficient coverage: %s",
             len(excluded), sorted(excluded),
         )
     return viable
