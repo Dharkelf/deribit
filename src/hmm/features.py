@@ -76,7 +76,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
                 f"Missing Parquet for {symbol} at {path}. "
                 "Run 'python main.py collect' first."
             )
-        df = pd.read_parquet(path)
+        df = pd.read_parquet(path, engine="pyarrow")
         df.columns = [f"{symbol}_{col}" for col in df.columns]
         frames.append(df)
 
@@ -99,7 +99,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
             f"Missing Parquet for VIX at {vix_path}. "
             "Run 'python main.py collect' first."
         )
-    vix_df = pd.read_parquet(vix_path)
+    vix_df = pd.read_parquet(vix_path, engine="pyarrow")
     vix_df.columns = [f"VIX_{col}" for col in vix_df.columns]
     for col in vix_df.columns:
         combined[col] = vix_df[col].reindex(full_index).ffill()
@@ -112,7 +112,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
-            s = pd.read_parquet(path)[col]
+            s = pd.read_parquet(path, engine="pyarrow")[col]
             s = s.reindex(full_index).ffill().fillna(0.0)
         else:
             logger.warning("%s.parquet not found — filling %s with 0", symbol, col)
@@ -128,7 +128,7 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
-            s = pd.read_parquet(path)[col]
+            s = pd.read_parquet(path, engine="pyarrow")[col]
             s = s.reindex(full_index).ffill()
         else:
             logger.warning("%s.parquet not found — filling %s with NaN", symbol, col)
@@ -139,8 +139,8 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     # Use NaN when data is missing.
     fed_path = rd / "FED_RATE.parquet"
     for col in ("fed_rate", "fed_rate_last_change"):
-        if fed_path.exists() and col in pd.read_parquet(fed_path).columns:
-            s = pd.read_parquet(fed_path)[col]
+        if fed_path.exists() and col in pd.read_parquet(fed_path, engine="pyarrow").columns:
+            s = pd.read_parquet(fed_path, engine="pyarrow")[col]
             s = s.reindex(full_index).ffill()
         else:
             logger.warning("FED_RATE.parquet missing col %s — filling NaN", col)
@@ -152,8 +152,8 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
     # propagating a nonsensical −1.0 percentage signal.
     for col in ("BTC_options_max_pain", "BTC_options_max_pain_7d"):
         path = rd / "BTC_OPTIONS_MAX_PAIN.parquet"
-        if path.exists() and col in pd.read_parquet(path).columns:
-            s = pd.read_parquet(path)[col]
+        if path.exists() and col in pd.read_parquet(path, engine="pyarrow").columns:
+            s = pd.read_parquet(path, engine="pyarrow")[col]
             s = s.reindex(full_index).ffill()  # NaN where no history yet
         else:
             logger.warning("BTC_OPTIONS_MAX_PAIN.parquet missing col %s — filling NaN", col)

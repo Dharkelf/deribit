@@ -12,6 +12,34 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _read_parquet(path: Path) -> pd.DataFrame:
+    """Read a Parquet file, falling back to fastparquet on pyarrow 19.x read errors.
+
+    pyarrow 19.0.0 has a bug ('Repetition level histogram size mismatch') when
+    reading files written with certain timestamp precisions. fastparquet handles
+    these gracefully. The fallback is transparent to callers; the file is always
+    re-saved as pyarrow on the next append(), normalising the format.
+    """
+    try:
+        return pd.read_parquet(path, engine="pyarrow")
+    except OSError:
+        logger.debug("pyarrow read failed for %s — retrying with fastparquet", path.name)
+        return pd.read_parquet(path, engine="fastparquet")
+
+
+def _write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Write DataFrame to Parquet, normalising timestamps to microsecond precision.
+
+    Nanosecond-precision timestamps can trigger the pyarrow 19.x histogram mismatch
+    bug on the subsequent read. Casting to datetime64[us, UTC] eliminates the
+    precision mismatch before writing.
+    """
+    out = df.copy()
+    if hasattr(out.index, "tz"):
+        out.index = out.index.astype("datetime64[us, UTC]")
+    out.to_parquet(path, engine="pyarrow")
+
+
 class ParquetRepository:
     """Repository pattern: isolates Parquet I/O from business logic."""
 
@@ -27,7 +55,7 @@ class ParquetRepository:
         path = self._path(symbol)
         if not path.exists():
             return None
-        df = pd.read_parquet(path, engine="pyarrow")
+        df = _read_parquet(path)
         return df.index.max() if not df.empty else None
 
     def load(self, symbol: str) -> pd.DataFrame:
@@ -35,7 +63,7 @@ class ParquetRepository:
         path = self._path(symbol)
         if not path.exists():
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return pd.read_parquet(path, engine="pyarrow")
+        return _read_parquet(path)
 
     def save_sample(self, symbol: str, n: int = 10) -> None:
         """Write *n* random rows from the stored Parquet to data/raw/samples/<symbol>.csv.
@@ -64,12 +92,12 @@ class ParquetRepository:
 
         path = self._path(symbol)
         if path.exists():
-            existing = pd.read_parquet(path, engine="pyarrow")
+            existing = _read_parquet(path)
             combined = pd.concat([existing, df])
         else:
             combined = df.copy()
 
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
         combined.index.name = "timestamp"
-        combined.to_parquet(path, engine="pyarrow")
+        _write_parquet(combined, path)
         logger.info("Saved %d rows for %s → %s", len(combined), symbol, path.name)

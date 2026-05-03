@@ -318,7 +318,7 @@ def _draw_two_week_panel(
         feat_line = ("Features: " + ", ".join(feature_names)) if feature_names else ""
         lines = [f"Active regime: {current_regime}", feat_line]
         if plus_features:
-            lines.append("XGB+ adds: " + ", ".join(plus_features))
+            lines.append(f"{in_data_label}+ adds: " + ", ".join(plus_features))
         annotation = "\n".join(l for l in lines if l)
         ax.text(
             0.99, 0.97, annotation,
@@ -543,6 +543,8 @@ def run(config: dict) -> None:
         today_actual_ts = _today_actual_ts,
         today_actual    = _today_actual,
         today_midnight  = _today_midnight,
+        in_data_adj_r2  = np_r.get("in_data_adj_r2"),
+        plus_features   = np_r.get("np_plus_features") or None,
     )
     ax3.set_title(
         f"NeuralProphet direct forecast  |  E[+24h]: ${np_r['np_exp'][-1]:.2f}"

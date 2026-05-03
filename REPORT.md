@@ -196,20 +196,39 @@ meaningful even when absolute values are negative.
 
 ## NeuralProphet Forecast — observed 2026-05-03
 
+### Model configuration
+
 ```
-Training window: 4 000 rows, n_lags=168, n_forecasts=48, 14 lagged regressors
+Training window: 8 652 rows (full history after cutoff cap — no row limit)
+n_lags=168, n_forecasts=48, max_epochs=60
 Learning rate: 0.001 (fixed — avoids PyTorch ≥2.6 LR-finder checkpoint bug)
-Training time: ~17 s on Apple M5
+Training time: ~27 s base + ~28 s NP+ = ~55 s total on Apple M5
 ```
+
+### NP vs NP+ comparison
+
+NP+ uses HMM features (14) + XGB+ selected features (10), for 24 regressors total.
+Both variants are trained; the one with higher in-data adj-R² is used for the forecast.
+
+```
+NP base:  adj-R²=−98.61  RMSE=$4.59  (14 HMM regressors)
+NP+:      adj-R²=−73.81  RMSE=$3.61  (24 regressors: HMM + XGB+)  ← selected
+```
+
+### Forecast (2026-05-03, NP+ selected)
 
 ```
 Last close:      $84.29
-E[+7d]:          $81.80
-CI [10%–90%]:    [$65.27, $81.80]
-In-data RMSE:    $3.45
+E[+1d]:          $80.43
+CI [10%–90%]:    [$80.43, $80.43]   ← quantile collapse (see Known Issues)
+In-data RMSE:    $3.61
+adj-R²:          −73.81
 ```
 
 NeuralProphet always retrains from scratch (PyTorch ≥2.6 Trainer not safely picklable).
+adj-R² is highly negative by construction on the 72 h in-data window with 24 features
+(same SS_res > SS_tot dynamic as XGB+). Relative Δadj-R² between NP and NP+ is the
+meaningful selection signal.
 Results vary slightly between runs due to stochastic training.
 
 ---
@@ -227,5 +246,10 @@ Results vary slightly between runs due to stochastic training.
 - **6 market-close features excluded** — `pandas-market-calendars` not installed. These features
   (BTC price relative to NYSE/TSE/XETRA close) would improve regime detection around market opens.
 - **Stock F&G** — CNN endpoint covers ~255 trading days maximum; no deeper history available.
-- **NeuralProphet CI lower = upper** — `np_lo == np_exp` observed occasionally; NeuralProphet
-  quantile estimation can collapse on short training windows or poor convergence.
+- **NeuralProphet CI lower = upper** — `np_lo == np_exp` observed; NeuralProphet quantile
+  estimation collapsed in the 2026-05-03 run (both bounds equal to expected value). Occurs when
+  the quantile heads do not diverge during training — likely due to the fixed learning rate and
+  short 72 h evaluation window relative to the 168-step AR structure.
+- **NeuralProphet adj-R² highly negative** — expected on a 72 h in-data window with 14–24
+  regressors (SS_res > SS_tot after d.o.f. penalty). Selection criterion is relative Δadj-R²
+  between NP base and NP+, which remains valid even when both are deeply negative.
