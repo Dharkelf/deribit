@@ -166,7 +166,7 @@ def _shade_regimes(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HMM k-step forecast (self-contained copy from predict.py)
+# HMM k-step forecast
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -264,6 +264,8 @@ def _draw_two_week_panel(
     plus_rmse: float | None = None,
     plus_features: list[str] | None = None,
     today_midnight: pd.Timestamp | None = None,
+    in_data_adj_r2: float | None = None,
+    plus_adj_r2: float | None = None,
 ) -> None:
     """Draw the 3-day history + today 00:00–23:00 forecast panel."""
     today = in_data_ts[-1]
@@ -280,16 +282,18 @@ def _draw_two_week_panel(
                 color=_SOL_COLOR, linewidth=1.2, zorder=4, label="SOL/USD actual")
 
     # In-data model predictions
+    _ar2_str = f"  adj-R²={in_data_adj_r2:.3f}" if in_data_adj_r2 is not None else ""
     ax.plot(in_data_ts, in_data_pred,
             color=forecast_color, linewidth=1.0, alpha=_INDATA_ALPHA, linestyle="-",
-            zorder=3, label=f"{in_data_label} in-data  RMSE=${in_data_rmse:.2f}")
+            zorder=3, label=f"{in_data_label} in-data  RMSE=${in_data_rmse:.2f}{_ar2_str}")
 
     # XGB+ in-data (if available)
     if plus_in_pred is not None and plus_in_ts is not None:
         ts_for_plus = plus_in_ts if len(plus_in_ts) == len(plus_in_pred) else in_data_ts
+        _plus_ar2_str = f"  adj-R²={plus_adj_r2:.3f}" if plus_adj_r2 is not None else ""
         ax.plot(ts_for_plus, plus_in_pred,
                 color=_XGB_PLUS_COLOR, linewidth=1.0, alpha=_INDATA_ALPHA, linestyle="-",
-                zorder=3, label=f"{in_data_label}+ in-data  RMSE=${plus_rmse:.2f}")
+                zorder=3, label=f"{in_data_label}+ in-data  RMSE=${plus_rmse:.2f}{_plus_ar2_str}")
 
     # Today divider
     ax.axvline(today, color="#555555", linewidth=0.8, linestyle=":", zorder=3)
@@ -302,17 +306,20 @@ def _draw_two_week_panel(
             color=forecast_color, linewidth=2.2, linestyle="--", zorder=5,
             label=f"{forecast_label}  E[+24h]=${exp_price[-1]:.2f}")
 
-    # XGB+ forecast
+    # XGB+ forecast — show all added feature names in label
     if plus_exp is not None:
-        feat_str = ", ".join((plus_features or [])[:2])
+        _feat_str = ", ".join(plus_features or []) or "—"
         ax.plot(future_ts, plus_exp,
                 color=_XGB_PLUS_COLOR, linewidth=2.0, linestyle="-", zorder=5,
-                label=f"{in_data_label}+ E[+24h]=${plus_exp[-1]:.2f}  (+{feat_str}…)")
+                label=f"{in_data_label}+ E[+24h]=${plus_exp[-1]:.2f}")
 
     # Regime + feature annotation (top-right)
     if current_regime is not None:
         feat_line = ("Features: " + ", ".join(feature_names)) if feature_names else ""
-        annotation = f"Active regime: {current_regime}\n{feat_line}"
+        lines = [f"Active regime: {current_regime}", feat_line]
+        if plus_features:
+            lines.append("XGB+ adds: " + ", ".join(plus_features))
+        annotation = "\n".join(l for l in lines if l)
         ax.text(
             0.99, 0.97, annotation,
             transform=ax.transAxes,
@@ -505,6 +512,8 @@ def run(config: dict) -> None:
         plus_rmse       = xgb_results.get("xgb_plus_rmse"),
         plus_features   = xgb_results.get("plus_features"),
         today_midnight  = _today_midnight,
+        in_data_adj_r2  = xgb_results.get("in_data_adj_r2"),
+        plus_adj_r2     = xgb_results.get("xgb_plus_adj_r2"),
     )
     ax2.set_title(
         f"XGBoost recursive forecast  |  E[+24h]: ${xgb_results['xgb_exp'][-1]:.2f}"

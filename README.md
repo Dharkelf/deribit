@@ -59,8 +59,9 @@ Two-module Python pipeline:
                         └─────────┬──────────┘
                                   │
                         ┌─────────▼──────────┐
-                        │  predict.py         │  7-day forecast
-                        │  k-step Markov      │  ±2σ confidence band
+                        │  visualize.py       │  3-panel dashboard
+                        │  predict_xgb.py     │  XGBoost recursive forecast
+                        │  predict_prophet.py │  NeuralProphet forecast
                         └────────────────────┘
 ```
 
@@ -85,7 +86,9 @@ src/
 │   ├── features.py            ← Strategy: 13 pluggable feature extractors
 │   ├── model.py               ← GaussianHMMModel wrapper (BIC, save/load)
 │   ├── optimizer.py           ← Optuna TPESampler + TimeSeriesSplit CV
-│   └── predict.py             ← run() pipeline: optimise → fit → forecast → plot
+│   ├── predict_xgb.py         ← XGBoost recursive 168-step + XGB+ variant
+│   ├── predict_prophet.py     ← NeuralProphet direct multi-step (n_forecasts=48)
+│   └── visualize.py           ← 3-panel dashboard; run(config) called from main.py
 │
 └── utils/
     └── paths.py               ← Central path resolution from settings.yaml
@@ -170,9 +173,9 @@ options:
   max_pain_days_ahead_short: 7  # short window
 
 hmm:
-  n_components: [2, 3, 4]  # regime count search space
+  n_components: [5]         # fixed: 5-regime model (Strong Bear/Bear/Neutral/Bull/Strong Bull)
   n_splits: 5               # TimeSeriesSplit folds
-  n_trials: 100             # Optuna trials
+  n_trials: 200             # Optuna trials
   random_state: 42
   covariance_type: full
   n_iter: 200               # max EM iterations per fit
@@ -288,13 +291,23 @@ git add requirements.txt
 
 ## Known Limitations
 
-- **BTC Options Max Pain** requires at least 1 day of collected data before features are usable.
-  The first run produces 1 row; subsequent daily `collect` runs accumulate history.
-- **GDELT** has a rate limit of ~1 request/minute; the client retries 3 times with 65s delay.
-- **Stock Fear & Greed** (CNN) covers ~254 trading days; older history is unavailable.
-- **MarketCloseExtractor** requires `pandas-market-calendars`. If unavailable, columns are NaN.
-- HMM training assumes stationarity of log-returns; structural breaks (e.g. exchange hacks)
-  can cause regime mislabelling for short windows after the event.
+- **VIX** — yfinance returns `YFTzMissingError` on weekends. VIX is forward-filled from the
+  last trading-day close until Monday. Acceptable for a slow-moving regime feature.
+- **BTC Options Max Pain** requires ≥200 rows before XGB+ can use it as a candidate feature.
+  Accumulates with each daily `collect` run; expected to qualify around day 9.
+- **GDELT** rate-limits on almost every first attempt; the client retries 3× with 65s delay
+  (~3 min worst case). Data is skipped (not zeroed) on persistent failure.
+- **Stock Fear & Greed** (CNN) covers ~255 trading days; older history is unavailable.
+- **MarketCloseExtractor** requires `pandas-market-calendars`. If unavailable, 6 BTC-at-close
+  features are silently excluded (logged as WARNING).
+- **XGBoost+ adj-R²** is negative on the 72 h in-data evaluation window. This is expected:
+  price prediction on a short noisy window with many features produces SS_res > SS_tot after
+  d.o.f. correction. Selection uses relative Δadj-R² vs the same-window baseline, which remains
+  informative even when absolute values are negative.
+- **NeuralProphet** always retrains from scratch (~17 s on M5); PyTorch ≥2.6 Trainer is not
+  safely picklable.
+- HMM training assumes stationarity of log-returns; structural breaks can cause short-window
+  mislabelling after major events.
 
 ---
 

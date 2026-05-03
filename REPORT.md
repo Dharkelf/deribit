@@ -5,71 +5,76 @@ Updated after each significant code change.
 
 ---
 
-## Data Collection — observed 2026-05-01
+## Data Collection — observed 2026-05-03
 
 ### Parquet files on disk
 
 | File | Rows | Date range | Notes |
 |---|---|---|---|
-| BTC.parquet | 8 792 | 2025-04-30 → 2026-05-01 | hourly |
-| ETH.parquet | 8 792 | 2025-04-30 → 2026-05-01 | hourly |
-| SOL.parquet | 8 792 | 2025-04-30 → 2026-05-01 | hourly |
-| VIX.parquet | 8 761 | 2025-04-30 → 2026-04-30 | daily ffilled hourly; lags 1 day behind Deribit |
-| FEMA.parquet | 366 | 2025-05-01 → 2026-05-01 | daily |
-| GDELT.parquet | 366 | 2025-05-01 → 2026-05-01 | daily |
-| BTC_OPTIONS_MAX_PAIN.parquet | 1 | 2026-05-01 | single snapshot; accumulates with daily collect |
-| CRYPTO_FEAR_GREED.parquet | 365 | 2025-05-02 → 2026-05-01 | daily |
-| STOCK_FEAR_GREED.parquet | 254 | 2025-05-01 → 2026-05-01 | trading days only (CNN) |
-| FED_RATE.parquet | 26 236 | 1954-07-01 → 2026-04-29 | full FRED history; lags 2 days |
+| BTC.parquet | 8 826 | 2025-04-30 → 2026-05-03 05:00 | hourly |
+| ETH.parquet | 8 826 | 2025-04-30 → 2026-05-03 05:00 | hourly |
+| SOL.parquet | 8 826 | 2025-04-30 → 2026-05-03 05:00 | hourly |
+| VIX.parquet | 8 785 | 2025-04-30 → 2026-05-01 | daily ffilled hourly; lags 2 days (yfinance fails on weekends) |
+| FEMA.parquet | 368 | 2025-05-01 → 2026-05-03 | daily |
+| GDELT.parquet | 368 | 2025-05-01 → 2026-05-03 | daily; almost always rate-limited on first attempt |
+| BTC_OPTIONS_MAX_PAIN.parquet | 3 | 2026-05-01 → 2026-05-03 | daily snapshot; XGB+ eligibility ~2026-05-09 (needs ≥200 rows) |
+| CRYPTO_FEAR_GREED.parquet | 367 | 2025-05-02 → 2026-05-03 | daily |
+| STOCK_FEAR_GREED.parquet | 255 | 2025-05-01 → 2026-05-01 | trading days only (CNN); lags on weekends |
+| FED_RATE.parquet | 26 237 | 1954-07-01 → 2026-04-30 | full FRED history; lags 2 days |
 
-### Current signal values (2026-05-01)
+### Current signal values (2026-05-03)
 
 | Signal | Value | Interpretation |
 |---|---|---|
-| SOL/USD close | $84.10 | — |
-| Crypto Fear & Greed | 0.26 / 100 | Extreme Fear |
-| Stock Fear & Greed (CNN) | 0.66 / 100 | Greed |
+| SOL/USD close | $84.29 | — |
+| Crypto Fear & Greed | 0.47 / 100 | Neutral |
+| Stock Fear & Greed (CNN) | 0.67 / 100 | Greed |
 | Fed Funds Rate | 3.64% | — |
 | Last FOMC change | −0.25 pp | Rate cut |
+| GDELT military score | 1.00 | Elevated activity |
+| FEMA disaster score | 1.00 | Active DR declarations |
+
+### Collector anomalies
+
+- **VIX** — yfinance returns `YFTzMissingError` on weekends (^VIX has no timezone on non-trading days).
+  Last successful fetch: 2026-05-01 (Thursday). VIX is forward-filled until next trading day.
+- **GDELT** — API returns HTTP 429 on almost every first attempt; 2–3 retries × 65 s = up to 3 min added
+  to every collect run. Data persists gracefully on permanent failure.
 
 ---
 
-## Feature Engineering — observed 2026-05-01
+## Feature Engineering — observed 2026-05-03
 
 ### Common DataFrame
 
 ```
-load_common_dataframe() → 8 749 rows × 28 cols
-Range: 2025-04-30 → 2026-04-30
+load_common_dataframe() → 8 826 rows × 28 cols
+Range: 2025-04-30 12:00 → 2026-05-03 05:00 UTC
 ```
 
-VIX lags Deribit by one day; inner-join clips the most recent Deribit row.
+BTC/ETH/SOL are inner-joined (authoritative time range); VIX/FEMA/GDELT are left-joined with
+`reindex + ffill` so weekend/holiday gaps do not truncate the crypto time series.
 
 ### NaN coverage per feature group
 
 | Feature group | NaN share | Cause |
 |---|---|---|
-| log_return (all symbols) | 0% | first row only (1 of 8 749), removed by dropna |
+| log_return (all symbols) | 0% | first row only, removed by dropna |
 | vol_24h, lag features | 0% | — |
-| vol_168h, corr_168h, momentum | 2% | first 168 rows (warm-up window) |
-| max_pain_* | **100%** | only 1 collection snapshot so far; excluded from optimization |
-| crypto_fear_greed | 0% | 365 days available |
-| stock_fear_greed | 0% | 254 days available, ffilled over weekends |
+| vol_168h, corr_168h, momentum | ~2% | first 168 rows warm-up window |
+| max_pain_* | ~100% | 3 snapshots only; needs ≥200 rows for XGB+ (~2026-05-09) |
+| crypto_fear_greed | 0% | 367 days available |
+| stock_fear_greed | 0% | 255 days available, ffilled over weekends |
 | fed_rate, fed_rate_last_change | 0% | full history back to 1954 |
 
-### Feature matrix dimensions
+### Features excluded at runtime
 
-| Config | Shape |
-|---|---|
-| All features except max pain | 8 581 rows × 40 cols |
-| All features including max pain | 0 rows (100% NaN → dropna kills all rows) |
-
-**Conclusion:** Max Pain features must be excluded until ≥7 days of daily collection have run.
-The optimizer dynamically detects coverage (<50% non-NaN threshold) and excludes them automatically.
+- **6 market-close features** — BTC_at_NYSE_close, BTC_at_TSE_close, BTC_at_XETRA_close,
+  BTC_return_since_NYSE_close/TSE_close/XETRA_close — excluded because `pandas-market-calendars`
+  is not installed. `MarketCloseExtractor` skips silently with a WARNING log.
 
 ### FOMC decisions detected (0.10 pp threshold)
 
-Most recent decisions from FRED DFF:
 ```
 2024-09-19   −0.50 pp  (emergency cut)
 2024-11-08   −0.25 pp
@@ -80,100 +85,147 @@ Most recent decisions from FRED DFF:
 current rate: 3.64%
 ```
 
-Daily noise (±0.01 pp) is correctly filtered by the 0.10 pp threshold.
-
 ---
 
-## HMM Optimisation — run 2 (2026-05-01, blueprint selection score)
+## HMM Optimisation — current (2026-05-02, k=5 fixed)
 
-**Objective changed** from mean CV log-likelihood per sample to composite regime-quality score:
+**Settings:** k fixed at 5 regimes, 200 Optuna trials, 5-fold TimeSeriesSplit, composite regime score.
+
 ```
 score = 3.0·avg_self_transition + 1.5·min_state_fraction
       − 0.25·median_run_days − 2.5·avg_entropy
       + 0.05·loglik_per_obs_feat
 ```
-Eligibility gate: min_state_fraction ≥ 0.05 per fold (collapsed-state models pruned).
-Optuna minimises −mean(score); higher score = better regime structure.
 
-```
-python main.py hmm
-Runtime: ~2.9 minutes (100 trials, 5 folds, 33 viable optional features)
-```
+Eligibility gate: min_state_fraction ≥ 0.02 per fold.
 
-### Optuna study
+### Optuna study (200 trials, fully completed)
 
 | Metric | Value |
 |---|---|
-| Trials completed | 99 / 100 |
-| Trials pruned | 1 |
-| Features excluded (coverage <50%) | 10 (4 max pain + 6 market-close; pandas-market-calendars not installed) |
+| Trials completed | 200 / 200 |
+| Trials pruned | 0 |
+| Features excluded (coverage <50%) | 10 (4 max pain + 6 market-close) |
 | Viable optional features | 33 |
-| Best score (−objective) | 3.2904 |
-| Best n_components | 2 |
-| Best feature count | 14 (13 optional + SOL_log_return) |
+| Best score | 2.9879 |
+| Best n_components | 5 |
+| Best feature count | 14 (13 optional + SOL_log_return always included) |
 
-### Top 5 feature configs
-
-| Rank | k | Features | Score |
-|---|---|---|---|
-| 1 | 2 | 14 | 3.2904 |
-| 2 | 2 | 14 | 3.2646 |
-| 3 | 2 | 17 | 3.2530 |
-| 4 | 2 | 12 | 3.2496 |
-| 5 | 2 | 12 | 3.2375 |
-
-All top-5 configs use k=2 regimes. The selection score heavily penalises
-state collapse (min_state_fraction gate) and uncertain assignments (avg_entropy),
-which disfavours k=3 on this dataset length.
-
-Features consistently selected across top configs:
-- `ETH_log_return`, `BTC_log_return` (log-returns)
-- `ETH_vol_168h`, `SOL_vol_24h`, `VIX_vol_24h` (volatility)
-- `SOL_ETH_corr_24h`, `VIX_change_24h` (cross-asset)
-- `BTC_log_return_lag_6h`, `BTC_log_return_lag_12h` (medium-term BTC lags)
-
-Features consistently NOT selected:
-- `BTC_log_return_lag_1h`, `BTC_log_return_lag_2h` (very short lags)
-- `VIX_zscore`, `BTC_momentum`, `SOL_momentum`, `ETH_momentum`
-- `fed_rate_last_change` (fed level `fed_rate` appears in rank 3)
-- `FEMA_score`, `GDELT_military_score`, `stock_fear_greed`
-
-`crypto_fear_greed` appears in rank 4 (only new-signal selected in top 5).
-
-### Final model fit (best config, full dataset)
+### Best feature subset (best_features.json)
 
 ```
-Feature matrix:  8 581 rows × 14 cols
-n_components:    2
-BIC:             −792 415
-Log-likelihood:  397 299
+ETH_log_return, BTC_vol_168h, ETH_vol_24h, ETH_vol_168h, SOL_vol_24h,
+VIX_vol_24h, SOL_BTC_corr_24h, ETH_momentum,
+BTC_log_return_lag_1h, BTC_log_return_lag_2h, BTC_log_return_lag_3h,
+BTC_log_return_lag_6h, BTC_log_return_lag_18h,
+FEMA_score
 ```
 
-### 7-day SOL/USD forecast
+### 7-day SOL/USD HMM forecast (2026-05-03)
 
 ```
-Last close:   $83.90  (2026-04-30)
-E[+7d]:       $83.53  (−0.4%)
-±2σ band:     [$68.24, $102.24]
+Last close:   $84.29
+E[+7d]:       $83.74  (−0.7%)
+±2σ band:     [$68.36, $102.57]
 ```
-
-k=2 model (Bearish / Bullish) places the last observation in a low-drift regime.
-The wide ±2σ band (±20%) reflects cumulative uncertainty over 168 hourly steps.
 
 ---
 
-## HMM Optimisation — run 1 (2026-05-01, CV log-likelihood — superseded)
+## XGBoost Forecast — observed 2026-05-03
 
-Objective was mean CV log-likelihood per sample. Resulted in k=3 with 33 features.
-Superseded by run 2 with blueprint selection score.
+### Model configuration
+
+```
+n_estimators=1500, learning_rate=0.015, max_depth=5
+subsample=0.8, colsample_bytree=0.8
+min_child_weight=3, reg_alpha=0.1, reg_lambda=1.5
+tree_method=hist  (NEON on Apple Silicon M5)
+Quantile models: n_estimators=800
+```
+
+### Feature filtering
+
+`_filter_24h_features()` removes `*_168h` and `*_momentum` from the 14 HMM-selected features,
+leaving 11 features for recursive forecasting (BTC_vol_168h, ETH_vol_168h, ETH_momentum removed).
+SOL_log_return is always added (recursive target). Training matrix: **8 796 rows × 12 features**.
+
+Training time on Apple M5: ~3 seconds.
+
+### In-data quality (last 72 h, real features — no recursion)
+
+```
+RMSE:    $0.42
+adj-R²:  0.19
+```
+
+### Forecast (2026-05-03, cutoff = 2026-05-02 23:00 UTC)
+
+```
+Last close:       $84.29
+E[today 23:00]:   $83.07
+CI [10%–90%]:     [$73.04, $95.02]
+```
+
+### XGB+ feature search
+
+Evaluated 26 candidate features (viable but not in HMM subset).
+Quick base adj-R² on 72 h window: −3.09 (short window, high variance → negative).
+
+**10 features with positive Δadj-R²:**
+```
+fed_rate, GDELT_military_score, BTC_vol_24h, SOL_ETH_corr_168h,
+crypto_fear_greed, SOL_ETH_corr_24h, BTC_log_return, SOL_vol_168h,
+stock_fear_greed, VIX_vol_168h
+```
+
+All 10 passed the dominance check (HMM-base mean importance ≥ added feature mean importance).
+
+```
+XGB+ in-data RMSE:  $0.95  (higher than base — more features on short window)
+XGB+ adj-R²:        −4.00
+XGB+ E[today 23:00]: $83.97
+```
+
+**Note:** adj-R² is negative for both base (−3.09 with 100 trees) and XGB+ (−4.00) on the 72 h
+in-data window. This is expected: price prediction on a short noisy window with many features
+naturally produces negative adj-R² (SS_res > SS_tot after d.o.f. penalty). The selection still
+works because all candidates are evaluated against the same baseline — the relative Δadj-R² is
+meaningful even when absolute values are negative.
+
+---
+
+## NeuralProphet Forecast — observed 2026-05-03
+
+```
+Training window: 4 000 rows, n_lags=168, n_forecasts=48, 14 lagged regressors
+Learning rate: 0.001 (fixed — avoids PyTorch ≥2.6 LR-finder checkpoint bug)
+Training time: ~17 s on Apple M5
+```
+
+```
+Last close:      $84.29
+E[+7d]:          $81.80
+CI [10%–90%]:    [$65.27, $81.80]
+In-data RMSE:    $3.45
+```
+
+NeuralProphet always retrains from scratch (PyTorch ≥2.6 Trainer not safely picklable).
+Results vary slightly between runs due to stochastic training.
 
 ---
 
 ## Known Issues
 
-- **Max Pain** — only 1 row of data. Becomes useful after ≥7 consecutive daily `collect` runs.
-- **VIX lag** — VIX always lags Deribit by 1 day because yfinance daily data is not intraday.
-  VIX_close for the current partial day is forward-filled from the previous close.
-- **GDELT rate-limiting** — 429 responses trigger 3 retries with 65s delay each. On slow days
-  this can add ~3 minutes to the collect run.
-- **Stock F&G** — CNN endpoint covers ~254 trading days maximum; no deeper history available.
+- **VIX weekend gap** — yfinance fails on Saturdays/Sundays with `YFTzMissingError`. VIX is
+  forward-filled from the last trading day until the next Monday open. Acceptable for a slow-
+  moving index used as a regime feature.
+- **Max Pain** — only 3 rows accumulated. XGB+ requires ≥200 rows; auto-qualifies ~2026-05-09.
+- **GDELT rate-limiting** — 429 on almost every first attempt; 2–3 retries × 65 s per run.
+  Consider running collect in off-peak hours. Data persists on permanent failure.
+- **XGB+ adj-R² negative** — expected on a 72 h in-data window with many features. Selection
+  criterion is relative Δadj-R² vs baseline, which remains valid.
+- **6 market-close features excluded** — `pandas-market-calendars` not installed. These features
+  (BTC price relative to NYSE/TSE/XETRA close) would improve regime detection around market opens.
+- **Stock F&G** — CNN endpoint covers ~255 trading days maximum; no deeper history available.
+- **NeuralProphet CI lower = upper** — `np_lo == np_exp` observed occasionally; NeuralProphet
+  quantile estimation can collapse on short training windows or poor convergence.

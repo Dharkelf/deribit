@@ -144,19 +144,20 @@ def test_in_data_predict_returns_correct_shape() -> None:
     X_df, sol_close = _make_X_df(400)
     X, y = _build_train_data(X_df, sol_close)
     model = _train_model(X, y, n_estimators=20)
-    ts, pred, actual, rmse = _in_data_predict(model, X_df, sol_close, window=48)
+    ts, pred, actual, rmse, ar2 = _in_data_predict(model, X_df, sol_close, window=48)
     assert len(ts) == 48
     assert len(pred) == 48
     assert len(actual) == 48
     assert np.isfinite(rmse)
     assert rmse > 0
+    assert np.isfinite(ar2)
 
 
 def test_in_data_predict_prices_positive() -> None:
     X_df, sol_close = _make_X_df(400)
     X, y = _build_train_data(X_df, sol_close)
     model = _train_model(X, y, n_estimators=20)
-    _, pred, _, _ = _in_data_predict(model, X_df, sol_close, window=48)
+    _, pred, _, _, _ = _in_data_predict(model, X_df, sol_close, window=48)
     assert np.all(pred > 0)
 
 
