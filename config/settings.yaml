@@ -33,7 +33,7 @@ backtest:
   min_train_days: 30         # minimum training window per fold
   step_days: 7               # walk-forward step size (weekly)
   horizon_hours: 24          # forecast horizon per fold
-  trailing_stop_pct: 15      # trailing stop: close position when equity drops >15 % from peak; null to disable
+  trailing_stop_pct: null    # trailing stop: close position when equity drops >15 % from peak; null to disable
   trading_hours: null        # UTC hour range [start, end) e.g. [8, 18] = 08:00–17:59; null = 24/7
 
 logging:

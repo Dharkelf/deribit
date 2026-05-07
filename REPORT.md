@@ -5,56 +5,63 @@ Updated after each significant code change.
 
 ---
 
-## Backtest Results — 2026-05-04 (first full run, 3-year data)
+## Backtest Results — 2026-05-07 (5-year data, trailing stop fix)
 
 ### Setup
 
-152 walk-forward folds, step=7d, horizon=24h, min-train=30d.
-Date range: 2023-06-07 → 2026-04-30.
+212 walk-forward folds, step=7d, horizon=24h, min-train=30d.
+Date range: 2022-04-15 → 2026-05-02 (≈4 years of folds over 5-year history).
 Oracle evaluation (real features at each step — no recursion). Upper bound on XGB accuracy.
 HMM regime labels: mild look-ahead bias (model trained on all data). Documented in report.
-NeuralProphet excluded (~55s/fold → ~3h for 200 folds). NP+ shape bug fixed 2026-05-07.
+NeuralProphet excluded (~55s/fold → ~3h for 212 folds, performance only — NP+ shape bug fixed 2026-05-07).
+
+### Trailing Stop Bug Fix (2026-05-07)
+
+Bug: `peak` was global and never reset → after any 15% drawdown the stop fired permanently
+after every regime change (97.8% of hours stopped, equity_strategy=0.82).
+Fix: `peak` resets to current equity on every regime-label change so each phase has its own
+independent 15% stop. Stopped hours: 12% (4351/36155).
 
 ### Option A — XGB Walk-Forward Forecast Accuracy
 
 | Metrik | Wert |
 |---|---|
-| RMSE | $1.22 |
-| MAE | $0.82 |
-| Directional Accuracy | 97.4 % (oracle — production recursive is lower) |
+| RMSE | $1.78 |
+| MAE | $1.10 |
+| Directional Accuracy | 94.8 % (oracle — production recursive is lower) |
 
 | Regime | RMSE | MAE | Dir. Acc. | Folds |
 |---|---|---|---|---|
-| Bearish | $1.37 | $1.12 | 100.0 % | 12 |
-| Neutral | $1.06 | $0.72 | 100.0 % | 107 |
-| Bullish | $1.20 | $0.91 | 95.5 % | 23 |
-| Strong Bullish | $2.24 | $1.36 | 88.9 % | 10 |
+| Strong Bearish | $0.94 | $0.68 | 84.6 % | 14 |
+| Bearish | $0.44 | $0.28 | 95.7 % | 24 |
+| Neutral | $1.94 | $1.33 | 97.9 % | 48 |
+| Bullish | $2.35 | $1.59 | 95.3 % | 65 |
+| Strong Bullish | $1.38 | $0.81 | 98.3 % | 61 |
 
-Note: Strong Bearish had 0 fold-start appearances → not in table.
-High DA is expected for oracle evaluation with a 24h horizon and strong momentum features.
+Strong Bearish RMSE higher and DA lower (84.6%) due to high volatility in 2022 bear market.
 
-### Option B — Regime Strategy
+### Option B — Regime Strategy (Variante A vs. B)
 
-| Metrik | Strategie | Buy-and-Hold |
+| Metrik | Stop 15 % (per Phase) | Kein Stop |
 |---|---|---|
-| Ann. Return | 132.4 % | 61.0 % |
-| Sharpe | 1.28 | 0.54 |
-| Max Drawdown | −51.5 % | — |
+| Ann. Return | 91.6 % | **165.7 %** |
+| Sharpe | 1.18 | **1.37** |
+| Max Drawdown | −37.0 % | −38.3 % |
+| Gestoppte Stunden | 12 % (4351 h) | — |
+| equity_strategy | 14.63× | 56.43× |
 
 Position map: Strong Bullish=+1, Bullish=+0.5, Neutral=0, Bearish=−0.5, Strong Bearish=−1.
 No transaction costs. Look-ahead bias in HMM labels. Real performance will be lower.
+Buy-and-Hold (SOL, 4-year): −0.6 % annualized.
 
-### Auto-generated Improvement Ideas (from BACKTEST_REPORT.md)
-
-1. Max Drawdown −52 % → Stop-Loss-Regel (−15 % Trail) für Strong Bearish implementieren
-2. 6 Folds mit RMSE > μ+2σ ($2.63) → Volatility-Regime als Conditioning-Variable prüfen
-3. NP-Bug fixen → NP Walk-Forward als Vergleich einbeziehen
+Befund: Trailing Stop 15 % kostet 74 pp Ann. Return, verbessert MDD kaum (−1.3 pp).
+Stop feuert zu oft bei normaler Volatilität profitabler Regime-Phasen → aktuell deaktiviert.
 
 ### Outputs
 
-- `data/processed/backtest_results.parquet` — 3648 Zeilen (fold × hour)
+- `data/processed/backtest_results.parquet` — 5088 Zeilen (fold × hour)
 - `data/processed/backtest_report.png` — 4-Panel Dashboard
-- `data/processed/BACKTEST_REPORT.md` — strukturierter Report
+- `data/processed/BACKTEST_REPORT.md` — strukturierter Report (aktuell: kein Stop)
 
 ---
 

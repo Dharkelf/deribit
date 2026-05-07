@@ -19,9 +19,9 @@ Trailing Stop
 Optional trailing stop-loss: when the strategy's cumulative equity falls more
 than `trailing_stop_pct` % below its running peak, the position is forced to
 zero for the remainder of that regime phase.  The stop resets on the next
-regime-label change, allowing a fresh entry.  The peak itself is never reset —
-only the "stopped" flag is cleared so drawdown can continue accumulating against
-the same all-time-high equity.
+regime-label change: both the stopped flag and the running peak are reset to
+the current equity, so each phase has its own independent stop measured from
+that phase's starting equity level.
 
 Example: trailing_stop_pct=15 → stop fires when equity drops 15 % from peak.
 
@@ -66,9 +66,10 @@ def _apply_trailing_stop(
     prev_label  = labels[0] if n > 0 else ""
 
     for i in range(n):
-        # Regime change → allow re-entry
+        # Regime change → allow re-entry; reset peak so each phase has its own stop
         if labels[i] != prev_label:
             is_stopped = False
+            peak = equity
             prev_label = labels[i]
 
         if is_stopped:
