@@ -503,3 +503,35 @@ def test_discrete_hourly_mode_unchanged():
     )
     # In hourly mode every hour is active; discrete mode has off-hours zeros
     assert r_hourly["position"].sum() > r_discrete["position"].sum()
+
+
+def test_long_only_no_short_positions():
+    """long_only=True: positions must never be negative."""
+    idx    = pd.date_range("2026-01-01 06:00", periods=24, freq="1h", tz="UTC")
+    lr     = pd.Series([0.001] * 24, index=idx)
+    labels = pd.Series(
+        ["Strong Bearish", "Bearish", "Neutral", "Bullish", "Strong Bullish"] * 4 + ["Neutral"] * 4,
+        index=idx,
+    )
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+        long_only=True,
+    )
+    assert (result["position"] >= 0.0).all()
+
+
+def test_long_only_bullish_enters_position():
+    """long_only=True: Bullish regime must produce positive position."""
+    idx    = pd.date_range("2026-01-01 06:00", periods=6, freq="1h", tz="UTC")
+    lr     = pd.Series([0.001] * 6, index=idx)
+    labels = pd.Series(["Strong Bullish"] * 6, index=idx)
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+        long_only=True,
+    )
+    in_window = result[~result["off_hours"]]
+    assert (in_window["position"] > 0.0).any()

@@ -65,8 +65,8 @@ def _run_backtest(config: dict) -> None:
     from src.backtest.engine import run as run_engine
     from src.backtest.report import generate as gen_report
 
-    fold_df, strategy_df = run_engine(config)
-    gen_report(fold_df, strategy_df, config)
+    fold_df, strategies = run_engine(config)
+    gen_report(fold_df, strategies, config)
 
 
 def main() -> None:

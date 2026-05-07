@@ -218,10 +218,18 @@ def _improvement_ideas(
 
 def generate(
     fold_df: pd.DataFrame,
-    strategy_df: pd.DataFrame,
+    strategies: dict[str, pd.DataFrame] | pd.DataFrame,
     config: dict,
 ) -> None:
-    """Save Parquet + 4-panel PNG + BACKTEST_REPORT.md to data/processed/."""
+    """Save Parquet + 4-panel PNG + BACKTEST_REPORT.md to data/processed/.
+
+    strategies may be a dict[name → DataFrame] (multi-variant) or a single
+    DataFrame (backwards-compatible).  The first variant is used as primary
+    for per-regime metrics, PNG, and improvement ideas.
+    """
+    if isinstance(strategies, pd.DataFrame):
+        strategies = {"strategy": strategies}
+
     out_dir = Path(config.get("storage", {}).get("processed_dir", "data/processed"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -231,6 +239,10 @@ def generate(
     fold_save.index = fold_save.index.as_unit("us")
     fold_save.to_parquet(parquet_path, engine="pyarrow")
     logger.info("Backtest results → %s", parquet_path)
+
+    # Primary strategy (first variant) drives PNG and per-regime analysis
+    primary_name = next(iter(strategies))
+    strategy_df  = strategies[primary_name]
 
     # ── Aggregate metrics ─────────────────────────────────────────────────────
     h1           = fold_df[fold_df["horizon_h"] == 1]
@@ -268,7 +280,8 @@ def generate(
         )
     ).reset_index(drop=True)
 
-    yearly_strat = _yearly_strategy_stats(strategy_df)
+    yearly_stats = {name: _yearly_strategy_stats(sdf) for name, sdf in strategies.items()}
+    yearly_strat = yearly_stats[primary_name]
     yearly_xgb   = _yearly_xgb_stats(fold_df)
 
     # ── 4-panel PNG ───────────────────────────────────────────────────────────
@@ -277,17 +290,22 @@ def generate(
     (ax1, ax2), (ax3, ax4) = axes
 
     _style(ax1)
-    ax1.plot(
-        strategy_df.index, strategy_df["equity_strategy"],
-        color="#3498db", lw=1.5,
-        label=f"Regime Strategy  Sharpe={sp_strat:.2f}  Ann.={ann_ret:.1%}",
-    )
+    _variant_colors = ["#3498db", "#e74c3c", "#2ecc71", "#f39c12", "#9b59b6"]
+    for (vname, vsdf), vcol in zip(strategies.items(), _variant_colors):
+        vann = annualized_return(vsdf["strategy_lr"].values)
+        vsp  = sharpe(vsdf["strategy_lr"].values)
+        ax1.plot(
+            vsdf.index, vsdf["equity_strategy"],
+            color=vcol, lw=1.5 if vname == primary_name else 1.0,
+            alpha=1.0 if vname == primary_name else 0.75,
+            label=f"{vname}  Sharpe={vsp:.2f}  Ann.={vann:.1%}",
+        )
     ax1.plot(
         strategy_df.index, strategy_df["equity_bnh"],
         color="#9945ff", lw=1.0, alpha=0.7,
         label=f"Buy & Hold  Sharpe={sp_bnh:.2f}  Ann.={ann_bnh:.1%}",
     )
-    ax1.set_title("Kumulativer Return — Option B (Regime-Strategie)", color="white",
+    ax1.set_title("Kumulativer Return — Option B (alle Varianten)", color="white",
                   fontsize=10, loc="left")
     ax1.set_ylabel("Equity (start = 1.0)", color=_TICK_CLR, fontsize=9)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
@@ -354,7 +372,7 @@ def generate(
     logger.info("Backtest plot → %s", png_path)
 
     # ── BACKTEST_REPORT.md ────────────────────────────────────────────────────
-    ideas    = _improvement_ideas(fold_df, strategy_df, yearly_strat=yearly_strat)
+    ideas = _improvement_ideas(fold_df, strategy_df, yearly_strat=yearly_strat)
     start_ts = fold_df.index.min().strftime("%Y-%m-%d")
     end_ts   = fold_df.index.max().strftime("%Y-%m-%d")
     n_folds  = int(fold_df["fold_id"].nunique())
@@ -463,7 +481,25 @@ def generate(
         "",
         "---",
         "",
-        "## 4. Jahresweise Strategie-Entwicklung",
+        "## 4. Strategie-Vergleich (alle Varianten)",
+        "",
+        "| Variante | Ann. Return | Sharpe | Max DD | Aktiv h | Gestoppt h |",
+        "|---|---|---|---|---|---|",
+    ]
+    for vname, vsdf in strategies.items():
+        vann  = annualized_return(vsdf["strategy_lr"].values)
+        vsp   = sharpe(vsdf["strategy_lr"].values)
+        vmdd  = max_drawdown(vsdf["equity_strategy"].values)
+        vact  = int((vsdf["position"] != 0).sum())
+        vstop = int(vsdf["stopped"].sum()) if vsdf["stopped"].any() else 0
+        lines.append(
+            f"| {vname} | {vann:.1%} | {vsp:.2f} | {vmdd:.1%} | {vact:,} | {vstop:,} |"
+        )
+    lines += [
+        "",
+        "---",
+        "",
+        "## 5. Jahresweise Strategie-Entwicklung",
         "",
         "> Jahresrenditen (nicht annualisiert). Aktive Stunden = Position ≠ 0.",
         "> Einträge = Positionswechsel in neuen Trade.",
@@ -504,7 +540,7 @@ def generate(
         "",
         "---",
         "",
-        "## 5. Verbesserungsideen",
+        "## 6. Verbesserungsideen",
         "",
     ]
     for i, idea in enumerate(ideas, 1):

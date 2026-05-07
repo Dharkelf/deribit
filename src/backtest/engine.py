@@ -46,39 +46,36 @@ from .strategy import RegimeStrategy
 logger = logging.getLogger(__name__)
 
 
-def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Run walk-forward backtest (A) and regime strategy (B).
+def _parse_variant(vcfg: dict) -> dict:
+    """Parse a single strategy_variants entry into kwargs for RegimeStrategy.apply()."""
+    _dt = vcfg.get("discrete_trading")
+    _tw = vcfg.get("trading_window")
+    _th = vcfg.get("trading_hours")
+    stop = vcfg.get("trailing_stop_pct")
+    return {
+        "discrete_trading":  (int(_dt[0]), int(_dt[1])) if _dt else None,
+        "trading_window":    (int(_tw[0]), int(_tw[1])) if _tw else None,
+        "trading_hours":     (int(_th[0]), int(_th[1])) if _th else None,
+        "trailing_stop_pct": float(stop) if stop else None,
+        "long_only":         bool(vcfg.get("long_only", False)),
+    }
+
+
+def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """Run walk-forward backtest (A) and regime strategies (B).
 
     Returns
     -------
-    fold_df     : one row per (fold × forecast hour)
-                  columns: fold_id, horizon_h, actual, xgb_pred, regime
-    strategy_df : one row per hour over full history
-                  columns: regime, position, strategy_lr, bnh_lr,
-                           equity_strategy, equity_bnh
+    fold_df    : one row per (fold × forecast hour)
+                 columns: fold_id, horizon_h, actual, xgb_pred, regime
+    strategies : dict[variant_name, strategy_df]; one row per hour over full
+                 history per variant; columns: regime, position, off_hours,
+                 stopped, strategy_lr, bnh_lr, equity_strategy, equity_bnh
     """
     bt_cfg      = config.get("backtest", {})
     min_train_h = int(bt_cfg.get("min_train_days", 30)) * 24
     step_h      = int(bt_cfg.get("step_days",      7))  * 24
     horizon_h   = int(bt_cfg.get("horizon_hours",  24))
-    trailing_stop_pct: float | None = bt_cfg.get("trailing_stop_pct") or None
-    if trailing_stop_pct is not None:
-        trailing_stop_pct = float(trailing_stop_pct)
-
-    _th_raw = bt_cfg.get("trading_hours")
-    trading_hours: tuple[int, int] | None = (
-        (int(_th_raw[0]), int(_th_raw[1])) if _th_raw else None
-    )
-
-    _dt_raw = bt_cfg.get("discrete_trading")
-    discrete_trading: tuple[int, int] | None = (
-        (int(_dt_raw[0]), int(_dt_raw[1])) if _dt_raw else None
-    )
-
-    _tw_raw = bt_cfg.get("trading_window")
-    trading_window: tuple[int, int] | None = (
-        (int(_tw_raw[0]), int(_tw_raw[1])) if _tw_raw else None
-    )
 
     # ── Data & model ──────────────────────────────────────────────────────────
     best = load_best_features(config)
@@ -114,43 +111,39 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         name="regime",
     )
 
-    # ── Option B: Regime strategy ─────────────────────────────────────────────
+    # ── Option B: Regime strategies (one per variant) ─────────────────────────
     sol_lr = np.log(sol_close / sol_close.shift(1)).dropna()
-    strategy_df = RegimeStrategy().apply(
-        sol_lr, label_series,
-        trailing_stop_pct=trailing_stop_pct,
-        trading_hours=trading_hours,
-        discrete_trading=discrete_trading,
-        trading_window=trading_window,
-    )
-    if discrete_trading is not None:
-        n_off   = int(strategy_df["off_hours"].sum())
-        n_active = int((strategy_df["position"] != 0).sum())
-        win = trading_window or (0, 24)
+
+    raw_variants = bt_cfg.get("strategy_variants")
+    if raw_variants:
+        variant_cfgs: dict[str, dict] = raw_variants
+    else:
+        # Fallback for backwards-compat: single variant from flat keys
+        variant_cfgs = {"default": {
+            "discrete_trading":  bt_cfg.get("discrete_trading"),
+            "trading_window":    bt_cfg.get("trading_window"),
+            "trading_hours":     bt_cfg.get("trading_hours"),
+            "trailing_stop_pct": bt_cfg.get("trailing_stop_pct"),
+            "long_only":         False,
+        }}
+
+    strategies: dict[str, pd.DataFrame] = {}
+    for name, vcfg in variant_cfgs.items():
+        kwargs = _parse_variant(vcfg)
+        sdf = RegimeStrategy().apply(sol_lr, label_series, **kwargs)
+        n_active  = int((sdf["position"] != 0).sum())
+        n_stopped = int(sdf["stopped"].sum()) if sdf["stopped"].any() else 0
         logger.info(
-            "Discrete trading %dh/%dh  window %02d:00–%02d:00 UTC: "
-            "%d active hours  %d off-window hours",
-            discrete_trading[0], discrete_trading[1],
-            win[0], win[1], n_active, n_off,
+            "Variant %-20s  equity=%.4f  active=%d h  stopped=%d h",
+            name, sdf["equity_strategy"].iloc[-1], n_active, n_stopped,
         )
-    elif trading_hours is not None:
-        n_off = int(strategy_df["off_hours"].sum())
-        logger.info(
-            "Trading hours %02d:00–%02d:00 UTC: %d hours filtered out (%.1f %%)",
-            trading_hours[0], trading_hours[1],
-            n_off, 100 * n_off / max(len(strategy_df), 1),
-        )
-    if trailing_stop_pct is not None:
-        n_stopped = int(strategy_df["stopped"].sum())
-        logger.info(
-            "Trailing stop %.0f %%: %d hours stopped out (%.1f %% of all hours)",
-            trailing_stop_pct, n_stopped, 100 * n_stopped / max(len(strategy_df), 1),
-        )
+        strategies[name] = sdf
+    first_sdf = next(iter(strategies.values()))
     logger.info(
-        "Regime strategy: %d hours  equity_strategy=%.4f  equity_bnh=%.4f",
-        len(strategy_df),
-        strategy_df["equity_strategy"].iloc[-1],
-        strategy_df["equity_bnh"].iloc[-1],
+        "Regime strategy: %d hours  variants=%d  primary_equity=%.4f",
+        len(first_sdf),
+        len(strategies),
+        first_sdf["equity_strategy"].iloc[-1],
     )
 
     # ── Option A: XGB walk-forward folds ──────────────────────────────────────
@@ -221,4 +214,4 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         fold_df.index.min().strftime("%Y-%m-%d"),
         fold_df.index.max().strftime("%Y-%m-%d"),
     )
-    return fold_df, strategy_df
+    return fold_df, strategies

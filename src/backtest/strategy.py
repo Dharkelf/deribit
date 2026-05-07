@@ -112,6 +112,7 @@ def _apply_discrete_trading(
     window_start: int,
     window_end: int,
     trailing_stop_pct: float | None = None,
+    long_only: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Signal-based discrete trading within a UTC trading window.
 
@@ -148,6 +149,8 @@ def _apply_discrete_trading(
         label = str(labels[i])
         hold  = max_hold_h if "Strong" in label else min_hold_h
         pos   = positions[i]
+        if long_only:
+            pos = max(0.0, pos)     # ignore short/flat regimes; hold period still advances
         peak  = equity      # per-trade peak for trailing stop
 
         is_stopped_trade = False
@@ -185,6 +188,7 @@ class RegimeStrategy:
         trading_hours: tuple[int, int] | None = None,
         discrete_trading: tuple[int, int] | None = None,
         trading_window: tuple[int, int] | None = None,
+        long_only: bool = False,
     ) -> pd.DataFrame:
         """Compute hourly strategy and buy-and-hold returns.
 
@@ -199,6 +203,8 @@ class RegimeStrategy:
                             regime evaluated at entry, held for N wall-clock hours
         trading_window    : (start_h, end_h) UTC — discrete mode only; new entries
                             only within this window; position=0 outside
+        long_only         : discrete mode only — clamp positions to ≥ 0 (no shorts);
+                            hold period still advances for non-bullish regimes
 
         Returns DataFrame with columns:
             regime, position, off_hours, stopped,
@@ -223,6 +229,7 @@ class RegimeStrategy:
                 win_start,
                 win_end,
                 trailing_stop_pct=trailing_stop_pct,
+                long_only=long_only,
             )
         else:
             # ── Hourly evaluation mode ────────────────────────────────────────
