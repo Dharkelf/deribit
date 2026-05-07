@@ -74,7 +74,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["collect", "hmm", "backtest"],
+        choices=["collect", "hmm", "backtest", "timing"],
         default=None,
         help="Module to run (omit to run both collect + hmm sequentially)",
     )
@@ -103,6 +103,10 @@ def main() -> None:
 
     if args.command == "backtest":
         _run_backtest(config)
+
+    if args.command == "timing":
+        from src.backtest.timing import run as run_timing
+        run_timing(config)
 
 
 if __name__ == "__main__":
