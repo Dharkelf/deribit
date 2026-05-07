@@ -61,7 +61,11 @@ class DeribitClient:
             )
             frame = self._fetch_chunk(instrument, cursor, chunk_end)
             if frame.empty:
-                break
+                # Instrument may not yet exist for this window (e.g. SOL_USDC-PERPETUAL
+                # launched 2022-03). Skip the window and try the next chunk rather than
+                # stopping — once the instrument is live, subsequent chunks will have data.
+                cursor = chunk_end
+                continue
             frames.append(frame)
             # advance past the last returned candle to avoid duplicates
             cursor = int(frame.index[-1].timestamp() * 1_000) + self._resolution * 60 * 1_000

@@ -10,7 +10,7 @@ symbols:
 
 collector:
   resolution: 60              # candle interval in minutes (1h = 60)
-  history_days: 365           # initial backfill window in days
+  history_days: 1800          # 5-year backfill window in days
 
 storage:
   raw_dir: data/raw           # Parquet output directory
@@ -27,6 +27,11 @@ hmm:
   random_state: 42            # seed for GaussianHMM and Optuna TPESampler
   covariance_type: full       # hmmlearn covariance type (full/diag/tied/spherical)
   n_iter: 200                 # max EM iterations per fit
+
+backtest:
+  min_train_days: 30    # minimum training window per fold
+  step_days: 7          # walk-forward step size (weekly)
+  horizon_hours: 24     # forecast horizon per fold
 
 logging:
   level: INFO

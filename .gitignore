@@ -35,6 +35,9 @@ build/
 .vscode/
 .idea/
 
+# Claude Code
+.claude/
+
 # PyTorch Lightning training artifacts
 lightning_logs/
 *.ckpt

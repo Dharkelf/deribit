@@ -5,6 +5,140 @@ Updated after each significant code change.
 
 ---
 
+## Backtest Results — 2026-05-04 (first full run, 3-year data)
+
+### Setup
+
+152 walk-forward folds, step=7d, horizon=24h, min-train=30d.
+Date range: 2023-06-07 → 2026-04-30.
+Oracle evaluation (real features at each step — no recursion). Upper bound on XGB accuracy.
+HMM regime labels: mild look-ahead bias (model trained on all data). Documented in report.
+NeuralProphet excluded (NP+ shape bug + ~55s/fold).
+
+### Option A — XGB Walk-Forward Forecast Accuracy
+
+| Metrik | Wert |
+|---|---|
+| RMSE | $1.22 |
+| MAE | $0.82 |
+| Directional Accuracy | 97.4 % (oracle — production recursive is lower) |
+
+| Regime | RMSE | MAE | Dir. Acc. | Folds |
+|---|---|---|---|---|
+| Bearish | $1.37 | $1.12 | 100.0 % | 12 |
+| Neutral | $1.06 | $0.72 | 100.0 % | 107 |
+| Bullish | $1.20 | $0.91 | 95.5 % | 23 |
+| Strong Bullish | $2.24 | $1.36 | 88.9 % | 10 |
+
+Note: Strong Bearish had 0 fold-start appearances → not in table.
+High DA is expected for oracle evaluation with a 24h horizon and strong momentum features.
+
+### Option B — Regime Strategy
+
+| Metrik | Strategie | Buy-and-Hold |
+|---|---|---|
+| Ann. Return | 132.4 % | 61.0 % |
+| Sharpe | 1.28 | 0.54 |
+| Max Drawdown | −51.5 % | — |
+
+Position map: Strong Bullish=+1, Bullish=+0.5, Neutral=0, Bearish=−0.5, Strong Bearish=−1.
+No transaction costs. Look-ahead bias in HMM labels. Real performance will be lower.
+
+### Auto-generated Improvement Ideas (from BACKTEST_REPORT.md)
+
+1. Max Drawdown −52 % → Stop-Loss-Regel (−15 % Trail) für Strong Bearish implementieren
+2. 6 Folds mit RMSE > μ+2σ ($2.63) → Volatility-Regime als Conditioning-Variable prüfen
+3. NP-Bug fixen → NP Walk-Forward als Vergleich einbeziehen
+
+### Outputs
+
+- `data/processed/backtest_results.parquet` — 3648 Zeilen (fold × hour)
+- `data/processed/backtest_report.png` — 4-Panel Dashboard
+- `data/processed/BACKTEST_REPORT.md` — strukturierter Report
+
+---
+
+## HMM Optimisation — 3-Jahr-Daten (2026-05-04)
+
+**Setup:** k=5 Regime, 200 Optuna-Trials, 5-fold TimeSeriesSplit, 26 244 Trainingszeilen.
+Laufzeit: 1h 30min (vs. ~15min auf 1-Jahr-Daten — 3× mehr Daten pro Fold).
+
+| Metrik | 1-Jahr (2026-05-02) | 3-Jahr (2026-05-04) |
+|---|---|---|
+| Best Score | 2.9879 | **3.0009** |
+| Features | 14 | **28** |
+| Best Trial | — | 141 |
+
+**Neue Feature-Subset (28 Features):**
+```
+BTC_log_return, ETH_log_return, VIX_log_return,
+BTC_vol_24h, BTC_vol_168h, ETH_vol_24h, SOL_vol_24h, SOL_vol_168h,
+VIX_vol_24h, VIX_vol_168h,
+SOL_BTC_corr_24h, SOL_ETH_corr_24h, SOL_ETH_corr_168h,
+VIX_change_24h, BTC_momentum, ETH_momentum,
+BTC_log_return_lag_1h/2h/12h/18h/24h,
+BTC_at_XETRA_close, BTC_return_since_XETRA_close,
+BTC_at_NYSE_close, BTC_return_since_TSE_close,
+FEMA_score, crypto_fear_greed, fed_rate
+```
+
+Neu vs. 1-Jahr: VIX_log_return, BTC/SOL/VIX_vol_168h, SOL_ETH_corr, market-close features,
+crypto_fear_greed, fed_rate, BTC_log_return direkt.
+
+---
+
+## 3-Jahr-Backfill — 2026-05-04
+
+| Datei | Zeilen | Bereich |
+|---|---|---|
+| BTC / ETH / SOL | 26 281 | 2023-05-05 → 2026-05-04 |
+| VIX | 26 197 | 2023-05-05 → 2026-05-01 |
+| FEMA / GDELT | 1 096 | 2023-05-05 → 2026-05-04 |
+| Crypto F&G | 1 096 | 2023-05-04 → 2026-05-04 |
+| Stock F&G | 253 | 2025-05-05 → 2026-05-04 (CNN-Cap) |
+| FED_RATE | 26 237 | 1954-07-01 → 2026-04-30 (unverändert) |
+| Max Pain | 4 | 2026-05-01 → jetzt (unverändert) |
+
+GDELT: kein Rate-Limit-Retry nötig — 1096-Tage-Range in einem Request. Laufzeit: <15s.
+
+---
+
+## XGBoost Forecast — 3-Jahr-Modell (2026-05-04)
+
+```
+Last close:       $83.91
+E[heute 23:00]:   $86.22
+CI [10%–90%]:     [$73.88, $92.53]
+```
+
+### XGB+ — deutlich verbessert
+
+5 Features ausgewählt (vs. 20 am 2026-05-04 mit 1-Jahr-Modell):
+`BTC_momentum, SOL_vol_168h, SOL_momentum, BTC_log_return_lag_3h, ETH_vol_168h`
+
+```
+XGB+ in-data RMSE:   $0.39  (vs. $0.61 mit 1-Jahr-Modell)
+XGB+ adj-R²:         −2.30  (vs. −7.72)
+XGB+ E[+24h]:        $86.45
+```
+
+---
+
+## NeuralProphet Forecast — 3-Jahr-Modell (2026-05-04)
+
+```
+E[+1d]:   $86.27
+CI:       [$79.20, $106.12]  ← nicht kollabiert (vs. 2026-05-03 und 2026-05-04 v1)
+RMSE:     $10.75             ← deutlich schlechter als 1-Jahr ($2.49)
+adj-R²:   −2475
+```
+
+CI-Kollaps behoben — breiteres Konfidenzband durch neue Features.
+RMSE verschlechtert: vermutlich durch geänderte HMM-Feature-Subset und größeres Daten-Fenster.
+NP+ nicht aktiviert (Base-Modell verwendet — Shape-Bug nicht reproduziert).
+
+---
+
 ## Data Collection — observed 2026-05-03
 
 ### Parquet files on disk
@@ -233,6 +367,72 @@ Results vary slightly between runs due to stochastic training.
 
 ---
 
+---
+
+## XGBoost Forecast — observed 2026-05-04
+
+### In-data quality (last 72 h)
+
+```
+RMSE:    $0.94   (vs $0.42 on 2026-05-03 — volatile May 1–4 window)
+adj-R²:  −12.68
+```
+
+### Forecast (2026-05-04, cutoff = 2026-05-03 23:00 UTC)
+
+```
+Last close:       $83.91
+E[today 23:00]:   $82.74
+CI [10%–90%]:     [$68.98, $92.50]
+```
+
+### XGB+ feature search — 2026-05-04
+
+Evaluated 32 candidate features. Quick base adj-R² = −14.99.
+
+20 features selected (vs 10 on 2026-05-03 — dominance check passed all):
+
+```
+BTC_at_NYSE_close, BTC_at_TSE_close, GDELT_military_score, BTC_vol_24h,
+fed_rate, BTC_at_XETRA_close, BTC_log_return, VIX_log_return,
+stock_fear_greed, crypto_fear_greed, SOL_ETH_corr_24h, SOL_ETH_corr_168h,
+fed_rate_last_change, BTC_return_since_XETRA_close, BTC_log_return_lag_12h,
+ETH_vol_168h, BTC_return_since_TSE_close, BTC_vol_168h, VIX_vol_168h,
+SOL_BTC_corr_168h
+```
+
+```
+XGB+ in-data RMSE:   $0.61
+XGB+ adj-R²:         −7.72
+XGB+ E[today 23:00]: $83.02
+```
+
+**Note:** The market-close features (BTC_at_NYSE_close etc.) appeared because
+`pandas-market-calendars` was apparently available at runtime today. Their presence
+inflates XGB+ feature count. The dominance check threshold may need tightening when
+more than ~10 features are selected.
+
+---
+
+## NeuralProphet Forecast — observed 2026-05-04
+
+NP+ **failed** with shape error and fell back to base model.
+
+```
+Error:   "Expected a 1D array, got an array with shape (8676, 2)"
+Model:   Base (14 HMM regressors)
+E[+1d]:  $87.47
+CI:      [$86.95, $87.77]  (narrow band, not a collapse)
+RMSE:    $2.49
+adj-R²:  −99.07
+```
+
+Root cause under investigation: the XGB+ 20-feature selection on this run
+may have introduced a multi-column regressor that NeuralProphet's
+`add_lagged_regressor` cannot handle as a 2D input.
+
+---
+
 ## Known Issues
 
 - **VIX weekend gap** — yfinance fails on Saturdays/Sundays with `YFTzMissingError`. VIX is
@@ -243,13 +443,18 @@ Results vary slightly between runs due to stochastic training.
   Consider running collect in off-peak hours. Data persists on permanent failure.
 - **XGB+ adj-R² negative** — expected on a 72 h in-data window with many features. Selection
   criterion is relative Δadj-R² vs baseline, which remains valid.
-- **6 market-close features excluded** — `pandas-market-calendars` not installed. These features
-  (BTC price relative to NYSE/TSE/XETRA close) would improve regime detection around market opens.
+- **XGB+ feature count inflation** — dominance check passed 20 features on 2026-05-04 (vs 10
+  on 2026-05-03). Dominance threshold may need tightening when candidate pool includes sparse
+  or session-close features. Investigate: raise the mean-importance floor.
+- **NP+ shape bug (2026-05-04)** — `predict_prophet.run()` raised `"Expected a 1D array, got
+  an array with shape (8676, 2)"` during NP+ evaluation. Base model used as fallback. Likely
+  caused by a multi-column array passed to `add_lagged_regressor` when XGB+ selects features
+  that expand to 2D on reindex. Needs fix before NP+ can be included in the backtest.
+- **6 market-close features excluded / intermittently included** — `pandas-market-calendars`
+  availability appears inconsistent across runs. These features cause XGB+ feature count to
+  jump when present.
 - **Stock F&G** — CNN endpoint covers ~255 trading days maximum; no deeper history available.
-- **NeuralProphet CI lower = upper** — `np_lo == np_exp` observed; NeuralProphet quantile
-  estimation collapsed in the 2026-05-03 run (both bounds equal to expected value). Occurs when
-  the quantile heads do not diverge during training — likely due to the fixed learning rate and
-  short 72 h evaluation window relative to the 168-step AR structure.
+- **NeuralProphet CI lower = upper** — quantile collapse observed on 2026-05-03. Occurs when
+  quantile heads do not diverge during training (fixed LR + short eval window).
 - **NeuralProphet adj-R² highly negative** — expected on a 72 h in-data window with 14–24
-  regressors (SS_res > SS_tot after d.o.f. penalty). Selection criterion is relative Δadj-R²
-  between NP base and NP+, which remains valid even when both are deeply negative.
+  regressors. Selection criterion is relative Δadj-R² between NP and NP+, which remains valid.

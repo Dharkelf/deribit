@@ -225,6 +225,12 @@ def _kstep_forecast(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _wrap_feature_list(features: list[str], per_line: int = 5) -> str:
+    """Join feature names into wrapped lines to prevent annotation overflow."""
+    chunks = [", ".join(features[i : i + per_line]) for i in range(0, len(features), per_line)]
+    return "\n  ".join(chunks)
+
+
 def _style_ax(ax: plt.Axes, hourly: bool = False) -> None:
     ax.set_facecolor(_AX_BG)
     ax.tick_params(axis="both", labelsize=8.5, colors=_TICK_COLOR)
@@ -313,19 +319,20 @@ def _draw_two_week_panel(
                 color=_XGB_PLUS_COLOR, linewidth=2.0, linestyle="-", zorder=5,
                 label=f"{in_data_label}+ E[+24h]=${plus_exp[-1]:.2f}")
 
-    # Regime + feature annotation (top-right)
+    # Regime + feature annotation (top-right, wrapped to avoid layout squeeze)
     if current_regime is not None:
-        feat_line = ("Features: " + ", ".join(feature_names)) if feature_names else ""
+        feat_line = ("Features:\n  " + _wrap_feature_list(feature_names)) if feature_names else ""
         lines = [f"Active regime: {current_regime}", feat_line]
         if plus_features:
-            lines.append(f"{in_data_label}+ adds: " + ", ".join(plus_features))
+            lines.append(f"{in_data_label}+ adds:\n  " + _wrap_feature_list(plus_features))
         annotation = "\n".join(l for l in lines if l)
         ax.text(
             0.99, 0.97, annotation,
             transform=ax.transAxes,
             ha="right", va="top",
-            fontsize=7, color="#cccccc",
-            linespacing=1.5,
+            fontsize=6.5, color="#cccccc",
+            linespacing=1.4,
+            clip_on=True,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#1a1a1a",
                       edgecolor="#444444", alpha=0.7),
         )
@@ -436,7 +443,9 @@ def run(config: dict) -> None:
     np_results = run_np(config)
 
     # ── Build figure (3 panels) ───────────────────────────────────────────────
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(17, 18))
+    fig, (ax1, ax2, ax3) = plt.subplots(
+        3, 1, figsize=(17, 18), constrained_layout=True,
+    )
     fig.patch.set_facecolor(_BG)
 
     # ── Panel 1: HMM (1-year view) ────────────────────────────────────────────
@@ -551,8 +560,6 @@ def run(config: dict) -> None:
         if not np.isnan(np_r["np_exp"][-1]) else "NeuralProphet direct forecast",
         color="white", fontsize=10, loc="left", pad=8,
     )
-
-    fig.tight_layout(pad=2.0)
 
     out_dir = Path(config.get("paths", {}).get("processed_dir", "data/processed"))
     out_dir.mkdir(parents=True, exist_ok=True)

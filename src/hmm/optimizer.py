@@ -46,15 +46,21 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 _STUDY_FILENAME        = "optuna_study.pkl"
 _BEST_FEATURES_FILENAME = "best_features.json"
 
-# SOL_log_return is always included — never toggled by Optuna
-_OPTIONAL_FEATURES: list[str] = [f for f in ALL_FEATURE_NAMES if f != "SOL_log_return"]
-
-# Max Pain is options-expiry-based (not daily) → sparse coverage is expected.
-# Include if at least 1 non-NaN row exists; do not apply the 50% threshold.
-_SPARSE_OK_FEATURES: frozenset[str] = frozenset({
+# Features excluded from HMM candidate set but still available for XGB/NP:
+# - Max Pain: options-expiry sparse data, unavailable for historical periods → too many NaN rows
+#   when the training window is extended to 4+ years
+# - Stock F&G: CNN API hard cap ~253 trading days → ~99% NaN on multi-year windows
+_HMM_EXCLUDED_FEATURES: frozenset[str] = frozenset({
     "max_pain_ratio", "max_pain_diff_pct",
     "max_pain_7d_ratio", "max_pain_7d_diff_pct",
+    "stock_fear_greed",
 })
+
+# SOL_log_return is always included — never toggled by Optuna
+_OPTIONAL_FEATURES: list[str] = [
+    f for f in ALL_FEATURE_NAMES
+    if f != "SOL_log_return" and f not in _HMM_EXCLUDED_FEATURES
+]
 
 # Lowered from 0.05 → 0.02 to support k=5 without excessive pruning.
 # Each state still needs ≥2% of training rows (≈170 rows on 8500-row dataset).
@@ -215,8 +221,6 @@ def _viable_optional_features(df_common: pd.DataFrame) -> list[str]:
     def _ok(f: str) -> bool:
         if f not in df.columns:
             return False
-        if f in _SPARSE_OK_FEATURES:
-            return df[f].notna().any()
         return df[f].notna().mean() >= 0.5
 
     viable = [f for f in _OPTIONAL_FEATURES if _ok(f)]
