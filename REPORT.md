@@ -13,7 +13,7 @@ Updated after each significant code change.
 Date range: 2023-06-07 → 2026-04-30.
 Oracle evaluation (real features at each step — no recursion). Upper bound on XGB accuracy.
 HMM regime labels: mild look-ahead bias (model trained on all data). Documented in report.
-NeuralProphet excluded (NP+ shape bug + ~55s/fold).
+NeuralProphet excluded (~55s/fold → ~3h for 200 folds). NP+ shape bug fixed 2026-05-07.
 
 ### Option A — XGB Walk-Forward Forecast Accuracy
 
@@ -446,10 +446,13 @@ may have introduced a multi-column regressor that NeuralProphet's
 - **XGB+ feature count inflation** — dominance check passed 20 features on 2026-05-04 (vs 10
   on 2026-05-03). Dominance threshold may need tightening when candidate pool includes sparse
   or session-close features. Investigate: raise the mean-importance floor.
-- **NP+ shape bug (2026-05-04)** — `predict_prophet.run()` raised `"Expected a 1D array, got
-  an array with shape (8676, 2)"` during NP+ evaluation. Base model used as fallback. Likely
-  caused by a multi-column array passed to `add_lagged_regressor` when XGB+ selects features
-  that expand to 2D on reindex. Needs fix before NP+ can be included in the backtest.
+- **NP+ shape bug (2026-05-04, FIXED 2026-05-07)** — `predict_prophet.run()` raised
+  `"Expected a 1D array, got an array with shape (8676, 2)"` during NP+ evaluation.
+  Root cause: `X_df[feat]` returned a DataFrame (not a Series) when column names were
+  duplicated. Fixed in `_build_np_df` (isinstance guard, squeeze to Series) and
+  `_train_model` (defensive shape assertion before `add_lagged_regressor`).
+  NP+ remains excluded from the walk-forward backtest for performance reasons only
+  (~55s/fold makes a 200-fold run impractical).
 - **6 market-close features excluded / intermittently included** — `pandas-market-calendars`
   availability appears inconsistent across runs. These features cause XGB+ feature count to
   jump when present.

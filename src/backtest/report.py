@@ -110,8 +110,9 @@ def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list
 
     # NP reminder
     ideas.append(
-        "NeuralProphet vom Walk-Forward ausgeschlossen (NP+ Shape-Bug + ~55 s/Fold). "
-        "Nach Bugfix NP-Folds separat einbeziehen und gegen XGB vergleichen."
+        "NeuralProphet vom Walk-Forward ausgeschlossen (~55 s/Fold → ~3 h für 200 Folds). "
+        "NP+ Shape-Bug ist behoben (2026-05-07). "
+        "Für separate NP-Evaluation: python main.py hmm (produziert NP-Forecast)."
     )
 
     # 3-year backfill recommendation if history < 700 days

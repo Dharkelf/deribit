@@ -165,6 +165,15 @@ def _train_model(
 
     for feat in feature_subset:
         if feat in np_df.columns:
+            # Defensive: verify column is 1D before handing to NeuralProphet.
+            # _build_np_df already guards against duplicate-column DataFrames;
+            # this assertion catches any future regression at the call site.
+            col_vals = np_df[feat].to_numpy()
+            if col_vals.ndim != 1:
+                logger.warning(
+                    "Skipping regressor '%s': expected 1D, got shape %s", feat, col_vals.shape
+                )
+                continue
             model.add_lagged_regressor(feat, n_lags=1)
 
     model.fit(np_df, freq="h", progress=None)

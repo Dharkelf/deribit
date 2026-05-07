@@ -19,7 +19,9 @@ Option B — HMM Regime Strategy:
   Position map: Strong Bullish=+1 … Strong Bearish=−1.
   Hourly P&L = position × actual SOL log-return.
 
-NeuralProphet excluded: ~55 s/fold + active shape bug in NP+ evaluation.
+NeuralProphet excluded: ~55 s/fold makes a 200-fold backtest impractical (~3 h).
+The NP+ shape bug (2026-05-04) is fixed in predict_prophet._build_np_df and
+_train_model; performance is the only remaining reason for exclusion.
 """
 
 import logging
