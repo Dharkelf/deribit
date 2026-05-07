@@ -535,3 +535,39 @@ def test_long_only_bullish_enters_position():
     )
     in_window = result[~result["off_hours"]]
     assert (in_window["position"] > 0.0).any()
+
+
+# ── Option C composite gate ───────────────────────────────────────────────────
+
+
+def test_xgb_conflict_halves_position():
+    """XGB direction conflict → position scaled to 0.5× of HMM value."""
+    idx = pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC")
+    lr = pd.Series([0.001] * 4, index=idx)
+    labels = pd.Series(["Bullish"] * 4, index=idx)  # HMM position = +0.5
+    # XGB says down (-1) → conflicts with Bullish (+0.5)
+    xgb_sig = pd.Series([-1.0] * 4, index=idx)
+    result = RegimeStrategy().apply(lr, labels, xgb_signal=xgb_sig)
+    # All hours in conflict → position should be 0.5 × 0.5 = 0.25
+    assert result["position"].iloc[0] == pytest.approx(0.25)
+
+
+def test_xgb_agreement_keeps_full_position():
+    """XGB direction agreement → position unchanged."""
+    idx = pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC")
+    lr = pd.Series([0.001] * 4, index=idx)
+    labels = pd.Series(["Bullish"] * 4, index=idx)  # HMM position = +0.5
+    xgb_sig = pd.Series([1.0] * 4, index=idx)       # XGB agrees → up
+    result = RegimeStrategy().apply(lr, labels, xgb_signal=xgb_sig)
+    assert result["position"].iloc[0] == pytest.approx(0.5)
+
+
+def test_persistence_scales_position():
+    """High persistence (p=1.0) → factor=1.0; low (p=0.0) → factor=0.5."""
+    idx = pd.date_range("2026-01-01", periods=2, freq="1h", tz="UTC")
+    lr = pd.Series([0.001, 0.001], index=idx)
+    labels = pd.Series(["Bullish", "Bullish"], index=idx)  # pos = +0.5
+    pers = pd.Series([1.0, 0.0], index=idx)
+    result = RegimeStrategy().apply(lr, labels, persistence=pers)
+    assert result["position"].iloc[0] == pytest.approx(0.5 * 1.0)   # 0.5 + 0.5*1 = 1.0
+    assert result["position"].iloc[1] == pytest.approx(0.5 * 0.5)   # 0.5 + 0.5*0 = 0.5

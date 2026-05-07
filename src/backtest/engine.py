@@ -53,11 +53,12 @@ def _parse_variant(vcfg: dict) -> dict:
     _th = vcfg.get("trading_hours")
     stop = vcfg.get("trailing_stop_pct")
     return {
-        "discrete_trading":  (int(_dt[0]), int(_dt[1])) if _dt else None,
-        "trading_window":    (int(_tw[0]), int(_tw[1])) if _tw else None,
-        "trading_hours":     (int(_th[0]), int(_th[1])) if _th else None,
+        "discrete_trading": (int(_dt[0]), int(_dt[1])) if _dt else None,
+        "trading_window": (int(_tw[0]), int(_tw[1])) if _tw else None,
+        "trading_hours": (int(_th[0]), int(_th[1])) if _th else None,
         "trailing_stop_pct": float(stop) if stop else None,
-        "long_only":         bool(vcfg.get("long_only", False)),
+        "long_only": bool(vcfg.get("long_only", False)),
+        "xgb_gated": bool(vcfg.get("xgb_gated", False)),
     }
 
 
@@ -72,15 +73,17 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
                  history per variant; columns: regime, position, off_hours,
                  stopped, strategy_lr, bnh_lr, equity_strategy, equity_bnh
     """
-    bt_cfg      = config.get("backtest", {})
+    bt_cfg = config.get("backtest", {})
     min_train_h = int(bt_cfg.get("min_train_days", 30)) * 24
-    step_h      = int(bt_cfg.get("step_days",      7))  * 24
-    horizon_h   = int(bt_cfg.get("horizon_hours",  24))
+    step_h = int(bt_cfg.get("step_days", 7)) * 24
+    horizon_h = int(bt_cfg.get("horizon_hours", 24))
 
     # ── Data & model ──────────────────────────────────────────────────────────
     best = load_best_features(config)
     if best is None:
-        raise FileNotFoundError("best_features.json missing — run 'python main.py hmm' first")
+        raise FileNotFoundError(
+            "best_features.json missing — run 'python main.py hmm' first"
+        )
 
     # HMM uses the full feature subset; XGB uses the ≤24h-filtered subset.
     # Using the filtered subset for HMM.predict() causes a shape mismatch because
@@ -88,14 +91,16 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     hmm_features: list[str] = best["feature_subset"]
     xgb_features: list[str] = _filter_24h_features(best["feature_subset"])
 
-    df_common  = load_common_dataframe(config)
-    X_hmm      = build_feature_matrix(df_common.copy(), hmm_features)
-    X_df       = build_feature_matrix(df_common.copy(), xgb_features)
-    sol_close  = df_common["SOL_close"].reindex(X_df.index)
+    df_common = load_common_dataframe(config)
+    X_hmm = build_feature_matrix(df_common.copy(), hmm_features)
+    X_df = build_feature_matrix(df_common.copy(), xgb_features)
+    sol_close = df_common["SOL_close"].reindex(X_df.index)
 
-    cutoff = config.get("_cutoff", pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1))
-    X_hmm     = X_hmm.loc[X_hmm.index <= cutoff]
-    X_df      = X_df.loc[X_df.index <= cutoff]
+    cutoff = config.get(
+        "_cutoff", pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(hours=1)
+    )
+    X_hmm = X_hmm.loc[X_hmm.index <= cutoff]
+    X_df = X_df.loc[X_df.index <= cutoff]
     sol_close = sol_close.loc[sol_close.index <= cutoff]
 
     mpath = models_dir(config) / f"best_hmm_k{best['n_components']}.pkl"
@@ -103,7 +108,7 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     logger.info("HMM model loaded ← %s", mpath)
 
     # ── HMM regime labels — full history (Option B) ───────────────────────────
-    labels      = model.predict(X_hmm.values)
+    labels = model.predict(X_hmm.values)
     regime_info = _assign_regime_colors_and_labels(model, X_hmm, labels)
     label_series = pd.Series(
         [regime_info[int(lbl)]["label"] for lbl in labels],
@@ -111,49 +116,43 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         name="regime",
     )
 
-    # ── Option B: Regime strategies (one per variant) ─────────────────────────
+    # ── Option B prep ─────────────────────────────────────────────────────────
     sol_lr = np.log(sol_close / sol_close.shift(1)).dropna()
 
     raw_variants = bt_cfg.get("strategy_variants")
     if raw_variants:
         variant_cfgs: dict[str, dict] = raw_variants
     else:
-        # Fallback for backwards-compat: single variant from flat keys
-        variant_cfgs = {"default": {
-            "discrete_trading":  bt_cfg.get("discrete_trading"),
-            "trading_window":    bt_cfg.get("trading_window"),
-            "trading_hours":     bt_cfg.get("trading_hours"),
-            "trailing_stop_pct": bt_cfg.get("trailing_stop_pct"),
-            "long_only":         False,
-        }}
+        variant_cfgs = {
+            "default": {
+                "discrete_trading": bt_cfg.get("discrete_trading"),
+                "trading_window": bt_cfg.get("trading_window"),
+                "trading_hours": bt_cfg.get("trading_hours"),
+                "trailing_stop_pct": bt_cfg.get("trailing_stop_pct"),
+                "long_only": False,
+            }
+        }
 
-    strategies: dict[str, pd.DataFrame] = {}
-    for name, vcfg in variant_cfgs.items():
-        kwargs = _parse_variant(vcfg)
-        sdf = RegimeStrategy().apply(sol_lr, label_series, **kwargs)
-        n_active  = int((sdf["position"] != 0).sum())
-        n_stopped = int(sdf["stopped"].sum()) if sdf["stopped"].any() else 0
-        logger.info(
-            "Variant %-20s  equity=%.4f  active=%d h  stopped=%d h",
-            name, sdf["equity_strategy"].iloc[-1], n_active, n_stopped,
-        )
-        strategies[name] = sdf
-    first_sdf = next(iter(strategies.values()))
-    logger.info(
-        "Regime strategy: %d hours  variants=%d  primary_equity=%.4f",
-        len(first_sdf),
-        len(strategies),
-        first_sdf["equity_strategy"].iloc[-1],
-    )
+    needs_gate = any(vcfg.get("xgb_gated", False) for vcfg in variant_cfgs.values())
 
     # ── Option A: XGB walk-forward folds ──────────────────────────────────────
-    N          = len(X_df)
-    fold_idxs  = range(min_train_h, N - horizon_h, step_h)
-    n_folds    = len(fold_idxs)
+    N = len(X_df)
+    fold_idxs = range(min_train_h, N - horizon_h, step_h)
+    n_folds = len(fold_idxs)
     logger.info(
         "Walk-forward: %d folds  min_train=%dd  step=%dd  horizon=%dh",
-        n_folds, min_train_h // 24, step_h // 24, horizon_h,
+        n_folds,
+        min_train_h // 24,
+        step_h // 24,
+        horizon_h,
     )
+
+    # Pre-compute for Option C: 24-step HMM transition matrix + integer state series
+    state_series = pd.Series(labels, index=X_hmm.index)
+    trans_24 = np.linalg.matrix_power(model.transmat_, 24)
+
+    xgb_direction_at: dict[pd.Timestamp, float] = {}
+    persistence_at: dict[pd.Timestamp, float] = {}
 
     fold_records: list[dict] = []
 
@@ -167,40 +166,45 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         base_model = _train_model(X_tr, y_tr)
 
         # Oracle prediction: use real future features (no recursive error accumulation)
-        X_test   = X_df.iloc[t : t + horizon_h]
-        s_test   = sol_close.iloc[t + 1 : t + horizon_h + 1]
+        X_test = X_df.iloc[t : t + horizon_h]
+        s_test = sol_close.iloc[t + 1 : t + horizon_h + 1]
         pred_lrs = base_model.predict(X_test.values.astype(np.float32))
-        start_p  = float(sol_close.iloc[t])
+        start_p = float(sol_close.iloc[t])
         pred_prices = start_p * np.exp(np.cumsum(pred_lrs))
 
-        # Timestamp-based lookup: X_df and X_hmm may have different row counts when
-        # _filter_24h_features removes 168h features, causing X_df to start earlier.
-        ts_at_t     = X_df.index[t]
-        regime_at_t = label_series.get(ts_at_t, label_series.iloc[min(t, len(label_series) - 1)])
+        ts_at_t = X_df.index[t]
+        regime_at_t = label_series.get(
+            ts_at_t, label_series.iloc[min(t, len(label_series) - 1)]
+        )
+
+        # ── Option C signals (collected per fold, free — model already trained) ──
+        if needs_gate:
+            xgb_direction_at[ts_at_t] = 1.0 if pred_prices[-1] > start_p else -1.0
+            state_int = int(state_series.get(ts_at_t, state_series.iloc[-1]))  # type: ignore[arg-type]
+            persistence_at[ts_at_t] = float(trans_24[state_int, state_int])
 
         for h, (pred_p, ts) in enumerate(zip(pred_prices, s_test.index)):
             act_p = float(s_test.iloc[h]) if h < len(s_test) else float("nan")
             fold_records.append(
                 {
-                    "fold_id":   fold_i,
+                    "fold_id": fold_i,
                     "timestamp": ts,
                     "horizon_h": h + 1,
-                    "actual":    act_p,
-                    "xgb_pred":  pred_p,
-                    "regime":    regime_at_t,
+                    "actual": act_p,
+                    "xgb_pred": pred_p,
+                    "regime": regime_at_t,
                 }
             )
 
         if (fold_i + 1) % 10 == 0 or fold_i == n_folds - 1:
-            fold_rmse = rmse(
-                s_test.values[: len(pred_prices)],
-                pred_prices,
-            )
+            fold_rmse = rmse(s_test.values[: len(pred_prices)], pred_prices)
             logger.info(
                 "  fold %3d/%d  cutoff=%s  regime=%-15s  RMSE=$%.2f",
-                fold_i + 1, n_folds,
+                fold_i + 1,
+                n_folds,
                 X_df.index[t].strftime("%Y-%m-%d"),
-                regime_at_t, fold_rmse,
+                regime_at_t,
+                fold_rmse,
             )
 
     fold_df = pd.DataFrame(fold_records)
@@ -214,4 +218,54 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         fold_df.index.min().strftime("%Y-%m-%d"),
         fold_df.index.max().strftime("%Y-%m-%d"),
     )
+
+    # ── Build Option C signal series (forward-filled to hourly) ──────────────
+    if needs_gate and xgb_direction_at:
+        xgb_dir_series: pd.Series | None = (
+            pd.Series(xgb_direction_at)
+            .sort_index()
+            .reindex(label_series.index, method="ffill")
+        )
+        pers_series: pd.Series | None = (
+            pd.Series(persistence_at)
+            .sort_index()
+            .reindex(label_series.index, method="ffill")
+        )
+        logger.info(
+            "Option C signals built: xgb_direction coverage=%.1f%%  persistence mean=%.3f",
+            xgb_dir_series.notna().mean() * 100,
+            pers_series.dropna().mean(),
+        )
+    else:
+        xgb_dir_series = None
+        pers_series = None
+
+    # ── Option B: Regime strategies (one per variant) ─────────────────────────
+    strategies: dict[str, pd.DataFrame] = {}
+    for name, vcfg in variant_cfgs.items():
+        kwargs = _parse_variant(vcfg)
+        is_gated = kwargs.pop("xgb_gated")
+        if is_gated and xgb_dir_series is not None:
+            kwargs["xgb_signal"] = xgb_dir_series
+            kwargs["persistence"] = pers_series
+        sdf = RegimeStrategy().apply(sol_lr, label_series, **kwargs)
+        n_active = int((sdf["position"] != 0).sum())
+        n_stopped = int(sdf["stopped"].sum()) if sdf["stopped"].any() else 0
+        logger.info(
+            "Variant %-20s  equity=%.4f  active=%d h  stopped=%d h",
+            name,
+            sdf["equity_strategy"].iloc[-1],
+            n_active,
+            n_stopped,
+        )
+        strategies[name] = sdf
+
+    first_sdf = next(iter(strategies.values()))
+    logger.info(
+        "Regime strategy: %d hours  variants=%d  primary_equity=%.4f",
+        len(first_sdf),
+        len(strategies),
+        first_sdf["equity_strategy"].iloc[-1],
+    )
+
     return fold_df, strategies

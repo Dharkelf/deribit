@@ -51,15 +51,16 @@ import numpy as np
 import pandas as pd
 
 _POSITION_MAP: dict[str, float] = {
-    "Strong Bullish":  1.0,
-    "Bullish":         0.5,
-    "Neutral":         0.0,
-    "Bearish":        -0.5,
+    "Strong Bullish": 1.0,
+    "Bullish": 0.5,
+    "Neutral": 0.0,
+    "Bearish": -0.5,
     "Strong Bearish": -1.0,
 }
 
 
 # ── Hourly-mode helpers ───────────────────────────────────────────────────────
+
 
 def _apply_trailing_stop(
     positions: np.ndarray,
@@ -71,13 +72,13 @@ def _apply_trailing_stop(
 
     Peak and stopped-flag reset on regime-label change.
     """
-    n        = len(positions)
-    adj_pos  = positions.copy()
-    stopped  = np.zeros(n, dtype=bool)
-    equity   = 1.0
-    peak     = 1.0
-    is_stopped  = False
-    prev_label  = labels[0] if n > 0 else ""
+    n = len(positions)
+    adj_pos = positions.copy()
+    stopped = np.zeros(n, dtype=bool)
+    equity = 1.0
+    peak = 1.0
+    is_stopped = False
+    prev_label = labels[0] if n > 0 else ""
 
     for i in range(n):
         if labels[i] != prev_label:
@@ -101,6 +102,7 @@ def _apply_trailing_stop(
 
 
 # ── Discrete-mode helper ──────────────────────────────────────────────────────
+
 
 def _apply_discrete_trading(
     positions: np.ndarray,
@@ -132,9 +134,9 @@ def _apply_discrete_trading(
     stopped   : np.ndarray  bool, True where stop zeroed a position
     off_hours : np.ndarray  bool, True where outside trading window
     """
-    n         = len(positions)
-    adj_pos   = np.zeros(n)
-    stopped   = np.zeros(n, dtype=bool)
+    n = len(positions)
+    adj_pos = np.zeros(n)
+    stopped = np.zeros(n, dtype=bool)
     off_hours = (hour_of_day < window_start) | (hour_of_day >= window_end)
     threshold = (trailing_stop_pct / 100.0) if trailing_stop_pct is not None else None
 
@@ -147,20 +149,20 @@ def _apply_discrete_trading(
 
         # ── Evaluation point ─────────────────────────────────────────────────
         label = str(labels[i])
-        hold  = max_hold_h if "Strong" in label else min_hold_h
-        pos   = positions[i]
+        hold = max_hold_h if "Strong" in label else min_hold_h
+        pos = positions[i]
         if long_only:
-            pos = max(0.0, pos)     # ignore short/flat regimes; hold period still advances
-        peak  = equity      # per-trade peak for trailing stop
+            pos = max(0.0, pos)  # ignore short/flat regimes; hold period still advances
+        peak = equity  # per-trade peak for trailing stop
 
         is_stopped_trade = False
         end = min(i + hold, n)
 
         for j in range(i, end):
             if off_hours[j]:
-                pass                         # flat, equity unchanged
+                pass  # flat, equity unchanged
             elif is_stopped_trade:
-                stopped[j] = True            # still flat, equity unchanged
+                stopped[j] = True  # still flat, equity unchanged
             else:
                 adj_pos[j] = pos
                 equity *= np.exp(pos * log_returns[j])
@@ -173,6 +175,7 @@ def _apply_discrete_trading(
 
 
 # ── Strategy ──────────────────────────────────────────────────────────────────
+
 
 class RegimeStrategy:
     """Maps HMM regime label strings to leveraged positions and computes P&L."""
@@ -189,6 +192,8 @@ class RegimeStrategy:
         discrete_trading: tuple[int, int] | None = None,
         trading_window: tuple[int, int] | None = None,
         long_only: bool = False,
+        xgb_signal: pd.Series | None = None,
+        persistence: pd.Series | None = None,
     ) -> pd.DataFrame:
         """Compute hourly strategy and buy-and-hold returns.
 
@@ -205,20 +210,26 @@ class RegimeStrategy:
                             only within this window; position=0 outside
         long_only         : discrete mode only — clamp positions to ≥ 0 (no shorts);
                             hold period still advances for non-bullish regimes
+        xgb_signal        : hourly series of XGB directional forecast (+1/-1);
+                            hourly mode only — conflicts halve position size
+        persistence       : hourly series of P(same regime at t+24h) in [0,1];
+                            hourly mode only — scales position by (0.5 + 0.5·p)
 
         Returns DataFrame with columns:
             regime, position, off_hours, stopped,
             strategy_lr, bnh_lr, equity_strategy, equity_bnh
         """
         idx = sol_log_returns.index.intersection(regime_labels.index)
-        lr  = sol_log_returns.loc[idx].fillna(0.0)
+        lr = sol_log_returns.loc[idx].fillna(0.0)
         lbl = regime_labels.loc[idx]
         pos = lbl.map(self.position_map).fillna(0.0).to_numpy()
 
         if discrete_trading is not None:
             # ── Discrete signal-based trading ─────────────────────────────────
             min_hold_h, max_hold_h = discrete_trading
-            win_start, win_end = trading_window if trading_window is not None else (0, 24)
+            win_start, win_end = (
+                trading_window if trading_window is not None else (0, 24)
+            )
             pos, stopped_mask, off_hours_mask = _apply_discrete_trading(
                 pos,
                 lbl.to_numpy(),
@@ -243,6 +254,17 @@ class RegimeStrategy:
                     off_hours_mask = (hour_of_day < start_h) & (hour_of_day >= end_h)
                 pos[off_hours_mask] = 0.0
 
+            # ── Composite gate: XGB direction + HMM persistence (Option C) ────
+            if xgb_signal is not None:
+                xs = xgb_signal.reindex(idx).fillna(0.0).to_numpy()
+                # Conflict: HMM and XGB point opposite directions → halve position
+                conflict = (np.sign(pos) != np.sign(xs)) & (pos != 0.0) & (xs != 0.0)
+                pos = pos * np.where(conflict, 0.5, 1.0)
+
+            if persistence is not None:
+                pers = persistence.reindex(idx).fillna(0.5).to_numpy()
+                pos = pos * (0.5 + 0.5 * pers)
+
             stopped_mask = np.zeros(len(pos), dtype=bool)
             if trailing_stop_pct is not None and trailing_stop_pct > 0:
                 pos, stopped_mask = _apply_trailing_stop(
@@ -253,21 +275,21 @@ class RegimeStrategy:
                 )
 
         strat_lr = pos * lr.to_numpy()
-        bnh_lr   = lr.to_numpy()
+        bnh_lr = lr.to_numpy()
 
         equity_strat = np.exp(np.cumsum(strat_lr))
-        equity_bnh   = np.exp(np.cumsum(bnh_lr))
+        equity_bnh = np.exp(np.cumsum(bnh_lr))
 
         return pd.DataFrame(
             {
-                "regime":          lbl.values,
-                "position":        pos,
-                "off_hours":       off_hours_mask,
-                "stopped":         stopped_mask,
-                "strategy_lr":     strat_lr,
-                "bnh_lr":          bnh_lr,
+                "regime": lbl.values,
+                "position": pos,
+                "off_hours": off_hours_mask,
+                "stopped": stopped_mask,
+                "strategy_lr": strat_lr,
+                "bnh_lr": bnh_lr,
                 "equity_strategy": equity_strat,
-                "equity_bnh":      equity_bnh,
+                "equity_bnh": equity_bnh,
             },
             index=idx,
         )

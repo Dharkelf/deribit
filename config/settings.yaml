@@ -54,5 +54,12 @@ backtest:
       trailing_stop_pct: 3     # stop bei −3 % vom Trade-Einstieg
       long_only: true          # Bearish/Neutral → flat halten, kein Short
 
+    hmm_xgb_gated:             # Option C: HMM position × XGB direction × persistence
+      discrete_trading: null   # stündlich; Skalierung durch Composite Gate
+      trading_window: null
+      trailing_stop_pct: null
+      long_only: false
+      xgb_gated: true          # aktiviert XGB-Richtungs-Gate + HMM-Persistenz-Gate
+
 logging:
   level: INFO
