@@ -198,6 +198,9 @@ python main.py hmm
 # Both in sequence
 python main.py
 
+# Walk-forward backtest (XGB oracle + HMM regime strategy)
+python main.py backtest
+
 # Visual inspection — 12 panels of raw collected data
 python -m src.collector.inspect
 

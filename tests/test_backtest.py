@@ -1,4 +1,4 @@
-"""Unit tests for src.backtest.metrics and src.backtest.strategy."""
+"""Unit tests for src.backtest.metrics, src.backtest.strategy, and backtest engine logic."""
 
 import numpy as np
 import pandas as pd
@@ -139,3 +139,84 @@ def test_strategy_unknown_regime_maps_to_zero():
     labels = pd.Series(["UnknownRegime"] * 20, index=lr.index)
     result = RegimeStrategy().apply(lr, labels)
     assert (result["position"] == 0.0).all()
+
+
+# ── engine helpers ────────────────────────────────────────────────────────────
+# Tests for the core logic patterns used in engine.run() without invoking the
+# full pipeline (which requires trained models and Parquet data on disk).
+
+
+def _make_regime_series(n: int = 500) -> pd.Series:
+    idx    = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    labels = (["Bullish"] * 200 + ["Neutral"] * 150 + ["Bearish"] * 150)[:n]
+    return pd.Series(labels, index=idx, name="regime")
+
+
+def test_fold_count_matches_range():
+    """Fold index arithmetic: range(min_train_h, N - horizon_h, step_h)."""
+    N          = 1000
+    min_train  = 168   # 7 days × 24h
+    step       = 168
+    horizon    = 24
+    fold_idxs  = list(range(min_train, N - horizon, step))
+    # All fold start indices are within bounds for a horizon window
+    assert all(t + horizon <= N for t in fold_idxs)
+    # First fold starts exactly at min_train
+    assert fold_idxs[0] == min_train
+    # Steps are exactly step_h apart
+    assert all(fold_idxs[i + 1] - fold_idxs[i] == step for i in range(len(fold_idxs) - 1))
+
+
+def test_fold_count_zero_when_data_too_short():
+    """No folds generated when N ≤ min_train_h + horizon_h."""
+    N, min_train, step, horizon = 50, 48, 24, 24
+    fold_idxs = list(range(min_train, N - horizon, step))
+    # 50 - 24 = 26 < 48 → empty
+    assert len(fold_idxs) == 0
+
+
+def test_timestamp_regime_lookup_hit():
+    """Timestamp in label_series returns correct regime."""
+    labels = _make_regime_series(500)
+    ts     = labels.index[250]
+    result = labels.get(ts, labels.iloc[-1])
+    assert result == labels.iloc[250]
+
+
+def test_timestamp_regime_lookup_miss_falls_back():
+    """Timestamp NOT in label_series (different grid) falls back to last known."""
+    labels  = _make_regime_series(500)
+    missing = labels.index[0] - pd.Timedelta(hours=1)   # before series start
+    fallback_idx = min(0, len(labels) - 1)
+    result  = labels.get(missing, labels.iloc[fallback_idx])
+    assert result == labels.iloc[0]
+
+
+def test_timestamp_regime_lookup_x_df_ahead_of_x_hmm():
+    """Simulate the row-count mismatch: X_df starts earlier than X_hmm.
+
+    When _filter_24h_features removes 168h lag features, X_df gains ~167 extra
+    rows at the start compared to X_hmm.  The fold index t into X_df therefore
+    maps to a timestamp that is NOT at position t in X_hmm.  Timestamp-based
+    lookup must find the regime correctly regardless of the offset.
+    """
+    offset = 167  # rows X_df starts earlier than X_hmm
+    N      = 600
+
+    # X_df index: starts offset hours earlier
+    x_df_idx = pd.date_range("2024-01-01", periods=N, freq="1h", tz="UTC")
+    # X_hmm (label_series) index: starts offset hours later
+    x_hmm_idx = x_df_idx[offset:]
+    labels = pd.Series(["Neutral"] * len(x_hmm_idx), index=x_hmm_idx, name="regime")
+    labels.iloc[0] = "Bullish"  # mark first entry distinctly
+
+    t       = offset   # fold index in X_df corresponds to x_hmm_idx[0]
+    ts_at_t = x_df_idx[t]
+
+    # Positional lookup (old broken approach): would hit x_hmm_idx[offset] = Neutral
+    positional_regime = labels.iloc[min(t, len(labels) - 1)]
+    # Timestamp lookup (correct): hits x_hmm_idx[0] = Bullish
+    ts_regime = labels.get(ts_at_t, labels.iloc[min(t, len(labels) - 1)])
+
+    assert ts_regime   == "Bullish"   # correct
+    assert positional_regime == "Neutral"  # what the old code returned (wrong)

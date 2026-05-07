@@ -109,7 +109,12 @@ def _build_np_df(
     })
     for feat in feature_subset:
         if feat in X_df.columns:
-            df[feat] = X_df[feat].reindex(idx).values
+            col = X_df[feat]
+            # X_df[feat] returns a DataFrame when column names are duplicated;
+            # add_lagged_regressor requires a 1D array.
+            if isinstance(col, pd.DataFrame):
+                col = col.iloc[:, 0]
+            df[feat] = col.reindex(idx).to_numpy()
     return df.reset_index(drop=True)
 
 
