@@ -474,3 +474,119 @@ def run(config: dict) -> dict:
         "np_plus_features": np_plus_features,
         "sol_last": float(sol_close.iloc[-1]),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Walk-forward backtest fold (full 48-step output, no today-mask)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def predict_backtest_fold(
+    config: dict,
+    cutoff_ts: pd.Timestamp,
+    feature_subset: list[str],
+    df_common: pd.DataFrame,
+) -> dict[str, object]:
+    """Train NP on data ≤ cutoff_ts and return the full 48-step forecast.
+
+    Designed for walk-forward backtesting.  Pass df_common pre-loaded once
+    outside the fold loop to avoid repeated file I/O.
+
+    Returns
+    -------
+    future_ts_48   : DatetimeIndex  cutoff_ts+1h … cutoff_ts+48h (UTC)
+    np_exp_48      : ndarray(48,)   mean forecast
+    np_lo_48       : ndarray(48,)   q10
+    np_hi_48       : ndarray(48,)   q90
+    sol_last       : float          SOL close at cutoff_ts
+    in_data_rmse   : float
+    in_data_adj_r2 : float
+    """
+    X_df = build_feature_matrix(df_common.copy(), feature_subset)
+    sol_close = df_common["SOL_close"].reindex(X_df.index)
+
+    X_df = X_df.loc[X_df.index <= cutoff_ts]
+    sol_close = sol_close.loc[sol_close.index <= cutoff_ts]
+
+    np_df = _build_np_df(X_df, sol_close, feature_subset)
+    model = _train_model(np_df, feature_subset, config)
+    future_df = _build_future_df(np_df, model, feature_subset)
+    forecast = model.predict(future_df)
+
+    last_known_ds = np_df["ds"].iloc[-1]
+    sol_last = float(sol_close.iloc[-1])
+
+    yhat_cols = sorted(
+        [c for c in forecast.columns if c.startswith("yhat") and c[4:].isdigit()],
+        key=lambda c: int(c[4:]),
+    )
+    lo_cols = sorted(
+        [c for c in forecast.columns if c.endswith(" 10.0%")],
+        key=lambda c: int(c.split("yhat")[1].split(" ")[0]),
+    )
+    hi_cols = sorted(
+        [c for c in forecast.columns if c.endswith(" 90.0%")],
+        key=lambda c: int(c.split("yhat")[1].split(" ")[0]),
+    )
+
+    n_steps = len(yhat_cols)
+    future_ts_48 = pd.DatetimeIndex(
+        pd.date_range(
+            start=pd.Timestamp(last_known_ds) + pd.Timedelta(hours=1),
+            periods=n_steps,
+            freq="1h",
+        )
+    ).tz_localize("UTC")
+
+    last_row = forecast[forecast["ds"] == last_known_ds]
+    if last_row.empty or not yhat_cols:
+        nan_arr = np.full(max(n_steps, 48), np.nan)
+        return {
+            "future_ts_48": future_ts_48,
+            "np_exp_48": nan_arr,
+            "np_lo_48": nan_arr.copy(),
+            "np_hi_48": nan_arr.copy(),
+            "sol_last": sol_last,
+            "in_data_rmse": np.nan,
+            "in_data_adj_r2": np.nan,
+        }
+
+    row = last_row.iloc[0]
+    np_exp_48 = np.array([row.get(c, np.nan) for c in yhat_cols], dtype=float)
+    np_lo_48 = (
+        np.array([row.get(c, np.nan) for c in lo_cols], dtype=float)
+        if lo_cols
+        else np_exp_48.copy()
+    )
+    np_hi_48 = (
+        np.array([row.get(c, np.nan) for c in hi_cols], dtype=float)
+        if hi_cols
+        else np_exp_48.copy()
+    )
+
+    # In-data quality (last 72 h)
+    hist = forecast[forecast["ds"] <= last_known_ds].tail(_INDATA_HOURS)
+    in_data_ts_local = pd.DatetimeIndex(pd.to_datetime(hist["ds"])).tz_localize("UTC")
+    in_data_pred_local = hist["yhat1"].ffill().values.astype(float)
+    actual_vals = sol_close.reindex(in_data_ts_local).values
+    valid = ~(np.isnan(in_data_pred_local) | np.isnan(actual_vals))
+    if valid.any():
+        in_data_rmse: float = float(
+            np.sqrt(np.mean((in_data_pred_local[valid] - actual_vals[valid]) ** 2))
+        )
+        in_data_adj_r2: float = _adj_r2(
+            actual_vals[valid], in_data_pred_local[valid], len(feature_subset)
+        )
+    else:
+        in_data_rmse = np.nan
+        in_data_adj_r2 = np.nan
+
+    return {
+        "future_ts_48": future_ts_48,
+        "np_exp_48": np_exp_48,
+        "np_lo_48": np_lo_48,
+        "np_hi_48": np_hi_48,
+        "sol_last": sol_last,
+        "in_data_rmse": in_data_rmse,
+        "in_data_adj_r2": in_data_adj_r2,
+    }

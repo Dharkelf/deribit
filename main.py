@@ -33,23 +33,25 @@ def _estimate_backtest_minutes(config: dict) -> str:
     except Exception:
         return "~5"
 
-    bt_cfg      = config.get("backtest", {})
+    bt_cfg = config.get("backtest", {})
     min_train_h = int(bt_cfg.get("min_train_days", 30)) * 24
-    step_h      = int(bt_cfg.get("step_days",      7))  * 24
-    horizon_h   = int(bt_cfg.get("horizon_hours",  24))
-    n_folds     = max(0, (n_rows - min_train_h - horizon_h) // step_h)
-    minutes     = max(1, round(n_folds * 3 / 60))
+    step_h = int(bt_cfg.get("step_days", 7)) * 24
+    horizon_h = int(bt_cfg.get("horizon_hours", 24))
+    n_folds = max(0, (n_rows - min_train_h - horizon_h) // step_h)
+    minutes = max(1, round(n_folds * 3 / 60))
     return f"~{minutes}"
 
 
 def _prompt_backtest(config: dict) -> None:
     border = "═" * 62
-    est    = _estimate_backtest_minutes(config)
+    est = _estimate_backtest_minutes(config)
     print(f"\n{border}")
     print("  Backtest verfügbar")
-    print(f"  Option A: XGB Walk-Forward Forecast-Accuracy (wöchentliche Folds)")
-    print(f"  Option B: HMM Regime-Strategie vs. Buy-and-Hold")
-    print(f"  Outputs:  backtest_results.parquet + backtest_report.png + BACKTEST_REPORT.md")
+    print("  Option A: XGB Walk-Forward Forecast-Accuracy (wöchentliche Folds)")
+    print("  Option B: HMM Regime-Strategie vs. Buy-and-Hold")
+    print(
+        "  Outputs:  backtest_results.parquet + backtest_report.png + BACKTEST_REPORT.md"
+    )
     print(f"  Geschätzte Laufzeit: {est} min")
     print(f"{border}")
     try:
@@ -74,7 +76,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["collect", "hmm", "backtest", "timing"],
+        choices=["collect", "hmm", "backtest", "timing", "prophet_day"],
         default=None,
         help="Module to run (omit to run both collect + hmm sequentially)",
     )
@@ -84,20 +86,24 @@ def main() -> None:
     _setup_logging(config.get("logging", {}).get("level", "INFO"))
 
     now_utc = pd.Timestamp.now(tz="UTC")
-    config["_now_utc"]   = now_utc
-    config["_today"]     = now_utc.normalize()                              # today 00:00 UTC
-    config["_cutoff"]    = now_utc.normalize() - pd.Timedelta(hours=1)     # yesterday 23:00 UTC
-    config["_last_hour"] = now_utc.floor("h")                              # last full hour
+    config["_now_utc"] = now_utc
+    config["_today"] = now_utc.normalize()  # today 00:00 UTC
+    config["_cutoff"] = now_utc.normalize() - pd.Timedelta(
+        hours=1
+    )  # yesterday 23:00 UTC
+    config["_last_hour"] = now_utc.floor("h")  # last full hour
 
     run_collect = args.command in (None, "collect", "hmm")
-    run_hmm     = args.command in (None, "hmm")
+    run_hmm = args.command in (None, "hmm")
 
     if run_collect:
         from src.collector.fetcher import run as run_collector
+
         run_collector(config)
 
     if run_hmm:
         from src.hmm.visualize import run as run_visualize
+
         run_visualize(config)
         _prompt_backtest(config)
 
@@ -106,7 +112,13 @@ def main() -> None:
 
     if args.command == "timing":
         from src.backtest.timing import run as run_timing
+
         run_timing(config)
+
+    if args.command == "prophet_day":
+        from src.backtest.prophet_day import run as run_prophet_day
+
+        run_prophet_day(config)
 
 
 if __name__ == "__main__":
