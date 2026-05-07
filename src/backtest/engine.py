@@ -59,6 +59,9 @@ def _parse_variant(vcfg: dict) -> dict:
         "trailing_stop_pct": float(stop) if stop else None,
         "long_only": bool(vcfg.get("long_only", False)),
         "xgb_gated": bool(vcfg.get("xgb_gated", False)),
+        "allowed_hours": [int(h) for h in vcfg["allowed_hours"]]
+        if vcfg.get("allowed_hours")
+        else None,
     }
 
 

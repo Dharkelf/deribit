@@ -571,3 +571,29 @@ def test_persistence_scales_position():
     result = RegimeStrategy().apply(lr, labels, persistence=pers)
     assert result["position"].iloc[0] == pytest.approx(0.5 * 1.0)   # 0.5 + 0.5*1 = 1.0
     assert result["position"].iloc[1] == pytest.approx(0.5 * 0.5)   # 0.5 + 0.5*0 = 0.5
+
+
+def test_allowed_hours_zeroes_positions_outside_set():
+    """Hourly mode: hours not in allowed_hours must have position=0."""
+    idx = pd.date_range("2026-01-05 00:00", periods=24, freq="1h", tz="UTC")  # Monday
+    lr = pd.Series([0.001] * 24, index=idx)
+    labels = pd.Series(["Bullish"] * 24, index=idx)
+    result = RegimeStrategy().apply(lr, labels, allowed_hours=[6, 7, 8])
+    assert (result["position"][~result.index.hour.isin([6, 7, 8])] == 0.0).all()
+    assert (result["position"][result.index.hour.isin([6, 7, 8])] == 0.5).all()
+
+
+def test_discrete_allowed_hours_skips_entry_outside_set():
+    """Discrete mode: entry must not happen at hour outside allowed_hours."""
+    # 24h window, only hour 6 allowed — all entries must be at hour 6
+    idx = pd.date_range("2026-01-05 00:00", periods=48, freq="1h", tz="UTC")
+    lr = pd.Series([0.001] * 48, index=idx)
+    labels = pd.Series(["Bullish"] * 48, index=idx)
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        allowed_hours=[6, 7, 8],
+    )
+    # No position outside allowed hours
+    outside = result[~result.index.hour.isin([6, 7, 8])]
+    assert (outside["position"] == 0.0).all()

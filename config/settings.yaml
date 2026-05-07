@@ -61,5 +61,34 @@ backtest:
       long_only: false
       xgb_gated: true          # aktiviert XGB-Richtungs-Gate + HMM-Persistenz-Gate
 
+    discrete_stop10_gated:     # discrete_stop10 + Option C Gate
+      discrete_trading: [3, 6]
+      trading_window: null
+      trailing_stop_pct: 10
+      long_only: false
+      xgb_gated: true
+
+    long_only_stop3_gated:     # long_only_stop3 + Option C Gate
+      discrete_trading: [3, 6]
+      trading_window: null
+      trailing_stop_pct: 3
+      long_only: true
+      xgb_gated: true
+
+    # Top-3 Blöcke aus Timing-Analyse: 00–03, 06–09, 15–18 UTC (~37% der Stunden)
+    discrete_gated_timed:      # discrete_stop10 + Gate + Timing-Filter
+      discrete_trading: [3, 6]
+      trailing_stop_pct: 10
+      long_only: false
+      xgb_gated: true
+      allowed_hours: [0, 1, 2, 6, 7, 8, 15, 16, 17]
+
+    long_only_gated_timed:     # long_only_stop3 + Gate + Timing-Filter
+      discrete_trading: [3, 6]
+      trailing_stop_pct: 3
+      long_only: true
+      xgb_gated: true
+      allowed_hours: [0, 1, 2, 6, 7, 8, 15, 16, 17]
+
 logging:
   level: INFO

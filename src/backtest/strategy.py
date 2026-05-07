@@ -115,6 +115,9 @@ def _apply_discrete_trading(
     window_end: int,
     trailing_stop_pct: float | None = None,
     long_only: bool = False,
+    allowed_hours_set: frozenset[int] | None = None,
+    xgb_signal_arr: np.ndarray | None = None,
+    persistence_arr: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Signal-based discrete trading within a UTC trading window.
 
@@ -123,21 +126,26 @@ def _apply_discrete_trading(
       "Strong *" → max_hold_h wall-clock hours
       otherwise  → min_hold_h wall-clock hours
 
-    Position is zero outside [window_start, window_end) UTC.
-    If trailing_stop_pct is set, equity is tracked hourly within each hold;
-    a >threshold % drop from the trade-entry equity fires the stop for the
-    remainder of that hold.
+    Position is zero outside [window_start, window_end) UTC and outside
+    allowed_hours_set (if given).  If trailing_stop_pct is set, equity is
+    tracked hourly within each hold; a >threshold % drop from the trade-entry
+    equity fires the stop for the remainder of that hold.
+
+    xgb_signal_arr / persistence_arr are applied at the evaluation (entry)
+    point only — the scaled position is then held for the full hold duration.
 
     Returns
     -------
     adj_pos   : np.ndarray  position per hour
     stopped   : np.ndarray  bool, True where stop zeroed a position
-    off_hours : np.ndarray  bool, True where outside trading window
+    off_hours : np.ndarray  bool, True where outside trading window / allowed hours
     """
     n = len(positions)
     adj_pos = np.zeros(n)
     stopped = np.zeros(n, dtype=bool)
     off_hours = (hour_of_day < window_start) | (hour_of_day >= window_end)
+    if allowed_hours_set is not None:
+        off_hours = off_hours | ~np.isin(hour_of_day, list(allowed_hours_set))
     threshold = (trailing_stop_pct / 100.0) if trailing_stop_pct is not None else None
 
     equity = 1.0
@@ -153,8 +161,15 @@ def _apply_discrete_trading(
         pos = positions[i]
         if long_only:
             pos = max(0.0, pos)  # ignore short/flat regimes; hold period still advances
-        peak = equity  # per-trade peak for trailing stop
 
+        # Composite gate applied once at entry — scales the held position
+        if xgb_signal_arr is not None and xgb_signal_arr[i] != 0.0:
+            if np.sign(pos) != np.sign(xgb_signal_arr[i]) and pos != 0.0:
+                pos *= 0.5
+        if persistence_arr is not None:
+            pos *= 0.5 + 0.5 * persistence_arr[i]
+
+        peak = equity  # per-trade peak for trailing stop
         is_stopped_trade = False
         end = min(i + hold, n)
 
@@ -194,6 +209,7 @@ class RegimeStrategy:
         long_only: bool = False,
         xgb_signal: pd.Series | None = None,
         persistence: pd.Series | None = None,
+        allowed_hours: list[int] | None = None,
     ) -> pd.DataFrame:
         """Compute hourly strategy and buy-and-hold returns.
 
@@ -211,9 +227,11 @@ class RegimeStrategy:
         long_only         : discrete mode only — clamp positions to ≥ 0 (no shorts);
                             hold period still advances for non-bullish regimes
         xgb_signal        : hourly series of XGB directional forecast (+1/-1);
-                            hourly mode only — conflicts halve position size
+                            conflicts with HMM direction halve the position size
         persistence       : hourly series of P(same regime at t+24h) in [0,1];
-                            hourly mode only — scales position by (0.5 + 0.5·p)
+                            scales position by (0.5 + 0.5·p)
+        allowed_hours     : list of UTC hours in [0,23] where trading is permitted;
+                            positions outside this set are zeroed (both modes)
 
         Returns DataFrame with columns:
             regime, position, off_hours, stopped,
@@ -230,6 +248,17 @@ class RegimeStrategy:
             win_start, win_end = (
                 trading_window if trading_window is not None else (0, 24)
             )
+            allowed_set = frozenset(allowed_hours) if allowed_hours else None
+            xgb_arr = (
+                xgb_signal.reindex(idx).fillna(0.0).to_numpy()
+                if xgb_signal is not None
+                else None
+            )
+            pers_arr = (
+                persistence.reindex(idx).fillna(0.5).to_numpy()
+                if persistence is not None
+                else None
+            )
             pos, stopped_mask, off_hours_mask = _apply_discrete_trading(
                 pos,
                 lbl.to_numpy(),
@@ -241,6 +270,9 @@ class RegimeStrategy:
                 win_end,
                 trailing_stop_pct=trailing_stop_pct,
                 long_only=long_only,
+                allowed_hours_set=allowed_set,
+                xgb_signal_arr=xgb_arr,
+                persistence_arr=pers_arr,
             )
         else:
             # ── Hourly evaluation mode ────────────────────────────────────────
@@ -253,6 +285,12 @@ class RegimeStrategy:
                 else:
                     off_hours_mask = (hour_of_day < start_h) & (hour_of_day >= end_h)
                 pos[off_hours_mask] = 0.0
+
+            # ── Allowed-hours filter (non-contiguous, hourly mode) ────────────
+            if allowed_hours is not None:
+                blocked = ~np.isin(idx.hour.to_numpy(), allowed_hours)
+                off_hours_mask = off_hours_mask | blocked
+                pos[blocked] = 0.0
 
             # ── Composite gate: XGB direction + HMM persistence (Option C) ────
             if xgb_signal is not None:
