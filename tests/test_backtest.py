@@ -141,6 +141,83 @@ def test_strategy_unknown_regime_maps_to_zero():
     assert (result["position"] == 0.0).all()
 
 
+# ── trading hours filter ──────────────────────────────────────────────────────
+
+
+def _make_mixed_hours(n: int = 48) -> tuple[pd.Series, pd.Series]:
+    """Return (log_returns, regime_labels) spanning two days, hours 0–23."""
+    idx    = pd.date_range("2026-01-01", periods=n, freq="1h", tz="UTC")
+    lr     = pd.Series(np.full(n, 0.001), index=idx)
+    labels = pd.Series(["Bullish"] * n, index=idx)
+    return lr, labels
+
+
+def test_trading_hours_off_hours_position_is_zero():
+    """Hours outside [8, 18) must have position zeroed."""
+    lr, labels = _make_mixed_hours()
+    result = RegimeStrategy().apply(lr, labels, trading_hours=(8, 18))
+    off = result[result["off_hours"]]
+    assert (off["position"] == 0.0).all()
+
+
+def test_trading_hours_on_hours_position_unchanged():
+    """Hours inside [8, 18) must carry the normal regime position."""
+    lr, labels = _make_mixed_hours()
+    result = RegimeStrategy().apply(lr, labels, trading_hours=(8, 18))
+    on = result[~result["off_hours"]]
+    assert (on["position"] == 0.5).all()   # Bullish = 0.5
+
+
+def test_trading_hours_correct_hour_count():
+    """For a 48-hour window, 24 hours fall inside [8, 18) (10 per day × 2)."""
+    lr, labels = _make_mixed_hours(48)
+    result = RegimeStrategy().apply(lr, labels, trading_hours=(8, 18))
+    assert result["off_hours"].sum() == 28   # 14 off-hours per day × 2
+    assert (~result["off_hours"]).sum() == 20  # 10 on-hours per day × 2
+
+
+def test_trading_hours_none_all_hours_active():
+    """Without a filter every row should have off_hours=False."""
+    lr, labels = _make_mixed_hours()
+    result = RegimeStrategy().apply(lr, labels, trading_hours=None)
+    assert not result["off_hours"].any()
+
+
+def test_trading_hours_off_hours_strategy_lr_is_zero():
+    """off_hours rows must contribute zero return regardless of market move."""
+    lr     = pd.Series(
+        [0.05] * 48,
+        index=pd.date_range("2026-01-01", periods=48, freq="1h", tz="UTC"),
+    )
+    labels = pd.Series(["Strong Bullish"] * 48, index=lr.index)
+    result = RegimeStrategy().apply(lr, labels, trading_hours=(8, 18))
+    off = result[result["off_hours"]]
+    assert np.allclose(off["strategy_lr"].values, 0.0, atol=1e-12)
+
+
+def test_trading_hours_applied_before_trailing_stop():
+    """Off-hours returns must not influence trailing stop equity tracking.
+
+    With [8, 18) filter and large off-hours losses, the trailing stop should
+    not fire (because off-hours positions are zero, so equity stays flat).
+    """
+    idx = pd.date_range("2026-01-01 00:00", periods=24, freq="1h", tz="UTC")
+    # Large losses at hours 0–7 and 18–23 (off-hours); small gains at 8–17
+    lr_vals = np.where(
+        (idx.hour < 8) | (idx.hour >= 18),
+        -0.10,   # −10 % per hour in off-hours
+        0.001,   # +0.1 % per hour in on-hours
+    )
+    lr     = pd.Series(lr_vals, index=idx)
+    labels = pd.Series(["Strong Bullish"] * 24, index=idx)
+
+    result = RegimeStrategy().apply(
+        lr, labels, trailing_stop_pct=15, trading_hours=(8, 18)
+    )
+    # Stop must NOT have fired (off-hours losses are invisible to stop tracking)
+    assert not result["stopped"].any()
+
+
 def test_strategy_stopped_column_absent_without_stop():
     lr, labels = _make_inputs()
     result = RegimeStrategy().apply(lr, labels)

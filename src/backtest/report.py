@@ -277,6 +277,12 @@ def generate(
 
     regime_dist = h1.groupby("regime").size()
 
+    th_raw  = bt_cfg.get("trading_hours")
+    th_str  = f"{th_raw[0]:02d}:00–{th_raw[1]:02d}:00 UTC" if th_raw else "24/7 (kein Filter)"
+    off_h   = int(strategy_df["off_hours"].sum()) if "off_hours" in strategy_df.columns else 0
+    total_h = len(strategy_df)
+    active_h = total_h - off_h
+
     lines: list[str] = [
         f"# Backtest Report — {now_str}",
         "",
@@ -287,6 +293,7 @@ def generate(
         f"| Zeitraum | {start_ts} → {end_ts} |",
         f"| Folds | {n_folds} (Step {bt_cfg.get('step_days', 7)}d, Horizont {bt_cfg.get('horizon_hours', 24)}h) |",
         f"| Mindest-Trainingsfenster | {bt_cfg.get('min_train_days', 30)} Tage |",
+        f"| Trading Hours (Option B) | {th_str} — {active_h:,} aktive / {total_h:,} gesamt Stunden |",
         f"| Modelle | XGB walk-forward (A) + HMM Regime-Strategie (B) |",
         f"| NeuralProphet | ausgeschlossen — NP+ Shape-Bug + ~55 s/Fold |",
         "",
@@ -345,6 +352,7 @@ def generate(
         "> Look-ahead-Bias bei Regime-Labels. Echte Performance wird schlechter sein.",
         "> Positionsmap: Strong Bullish=+1.0, Bullish=+0.5, Neutral=0, Bearish=−0.5, Strong Bearish=−1.0.",
         "> Keine Transaktionskosten modelliert.",
+        f"> Trading Hours: {th_str}.",
         stop_note,
         "",
         "| Metrik | Strategie | Buy-and-Hold |",

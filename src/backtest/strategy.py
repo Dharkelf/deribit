@@ -24,6 +24,13 @@ only the "stopped" flag is cleared so drawdown can continue accumulating against
 the same all-time-high equity.
 
 Example: trailing_stop_pct=15 → stop fires when equity drops 15 % from peak.
+
+Trading Hours Filter
+--------------------
+Optional UTC hour range [start, end) — e.g. [8, 18] means 08:00–17:59 UTC.
+Positions outside this window are zeroed before computing P&L and before the
+trailing stop sees the returns, so the stop only tracks realized (in-window)
+equity.  Set trading_hours=None (the default) for 24/7 operation.
 """
 
 import numpy as np
@@ -92,6 +99,7 @@ class RegimeStrategy:
         sol_log_returns: pd.Series,
         regime_labels: pd.Series,
         trailing_stop_pct: float | None = None,
+        trading_hours: tuple[int, int] | None = None,
     ) -> pd.DataFrame:
         """Compute hourly strategy and buy-and-hold returns.
 
@@ -101,16 +109,33 @@ class RegimeStrategy:
         regime_labels     : HMM regime label per hour
         trailing_stop_pct : optional trailing stop threshold in percent
                             (e.g. 15 → stop fires when equity drops 15 % from peak)
+        trading_hours     : optional (start_h, end_h) UTC hour range [start, end);
+                            positions outside this window are set to zero.
+                            Applied before trailing stop so the stop only tracks
+                            realized in-window equity.
 
         Returns DataFrame with columns:
-            regime, position, stopped, strategy_lr, bnh_lr,
-            equity_strategy, equity_bnh
+            regime, position, off_hours, stopped,
+            strategy_lr, bnh_lr, equity_strategy, equity_bnh
         """
         idx = sol_log_returns.index.intersection(regime_labels.index)
         lr  = sol_log_returns.loc[idx].fillna(0.0)
         lbl = regime_labels.loc[idx]
         pos = lbl.map(self.position_map).fillna(0.0).to_numpy()
 
+        # ── Trading hours filter (applied first so stop tracks in-window equity) ─
+        off_hours_mask = np.zeros(len(pos), dtype=bool)
+        if trading_hours is not None:
+            start_h, end_h = trading_hours
+            hour_of_day = idx.hour.to_numpy()
+            if start_h < end_h:
+                off_hours_mask = (hour_of_day < start_h) | (hour_of_day >= end_h)
+            else:
+                # Overnight range: e.g. [22, 6) means 22:00–05:59
+                off_hours_mask = (hour_of_day < start_h) & (hour_of_day >= end_h)
+            pos[off_hours_mask] = 0.0
+
+        # ── Trailing stop ────────────────────────────────────────────────────────
         stopped_mask = np.zeros(len(pos), dtype=bool)
         if trailing_stop_pct is not None and trailing_stop_pct > 0:
             pos, stopped_mask = _apply_trailing_stop(
@@ -130,6 +155,7 @@ class RegimeStrategy:
             {
                 "regime":          lbl.values,
                 "position":        pos,
+                "off_hours":       off_hours_mask,
                 "stopped":         stopped_mask,
                 "strategy_lr":     strat_lr,
                 "bnh_lr":          bnh_lr,

@@ -65,6 +65,11 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     if trailing_stop_pct is not None:
         trailing_stop_pct = float(trailing_stop_pct)
 
+    _th_raw = bt_cfg.get("trading_hours")
+    trading_hours: tuple[int, int] | None = (
+        (int(_th_raw[0]), int(_th_raw[1])) if _th_raw else None
+    )
+
     # ── Data & model ──────────────────────────────────────────────────────────
     best = load_best_features(config)
     if best is None:
@@ -101,7 +106,18 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     # ── Option B: Regime strategy ─────────────────────────────────────────────
     sol_lr = np.log(sol_close / sol_close.shift(1)).dropna()
-    strategy_df = RegimeStrategy().apply(sol_lr, label_series, trailing_stop_pct=trailing_stop_pct)
+    strategy_df = RegimeStrategy().apply(
+        sol_lr, label_series,
+        trailing_stop_pct=trailing_stop_pct,
+        trading_hours=trading_hours,
+    )
+    if trading_hours is not None:
+        n_off = int(strategy_df["off_hours"].sum())
+        logger.info(
+            "Trading hours %02d:00–%02d:00 UTC: %d hours filtered out (%.1f %%)",
+            trading_hours[0], trading_hours[1],
+            n_off, 100 * n_off / max(len(strategy_df), 1),
+        )
     if trailing_stop_pct is not None:
         n_stopped = int(strategy_df["stopped"].sum())
         logger.info(
