@@ -56,9 +56,9 @@ from src.utils.paths import models_dir
 
 logger = logging.getLogger(__name__)
 
-_FORECAST_HOURS  = 48    # 2-day buffer; today's 24 h extracted by UTC mask
-_INDATA_HOURS    = 72    # in-data window shown in plot (last 3 days)
-_MAX_EPOCHS      = 60    # up from 40 — better convergence on full dataset
+_FORECAST_HOURS = 48  # 2-day buffer; today's 24 h extracted by UTC mask
+_INDATA_HOURS = 72  # in-data window shown in plot (last 3 days)
+_MAX_EPOCHS = 60  # up from 40 — better convergence on full dataset
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,11 +102,13 @@ def _build_np_df(
 ) -> pd.DataFrame:
     """Build NeuralProphet input DataFrame (tz-naive ds + y + regressor columns)."""
     aligned = sol_close.reindex(X_df.index).dropna()
-    idx     = aligned.index
-    df = pd.DataFrame({
-        "ds": idx.tz_localize(None),
-        "y":  aligned.values,
-    })
+    idx = aligned.index
+    df = pd.DataFrame(
+        {
+            "ds": idx.tz_localize(None),
+            "y": aligned.values,
+        }
+    )
     for feat in feature_subset:
         if feat in X_df.columns:
             col = X_df[feat]
@@ -125,8 +127,12 @@ def _build_future_df(
     n_steps: int = _FORECAST_HOURS,
 ) -> pd.DataFrame:
     """Create the future dataframe with forward-filled regressor values."""
-    future = model.make_future_dataframe(np_df, periods=n_steps, n_historic_predictions=True)
-    last_known = {feat: np_df[feat].iloc[-1] for feat in feature_subset if feat in np_df.columns}
+    future = model.make_future_dataframe(
+        np_df, periods=n_steps, n_historic_predictions=True
+    )
+    last_known = {
+        feat: np_df[feat].iloc[-1] for feat in feature_subset if feat in np_df.columns
+    }
     for feat, val in last_known.items():
         mask = future["ds"] > np_df["ds"].iloc[-1]
         future.loc[mask, feat] = val
@@ -171,7 +177,9 @@ def _train_model(
             col_vals = np_df[feat].to_numpy()
             if col_vals.ndim != 1:
                 logger.warning(
-                    "Skipping regressor '%s': expected 1D, got shape %s", feat, col_vals.shape
+                    "Skipping regressor '%s': expected 1D, got shape %s",
+                    feat,
+                    col_vals.shape,
                 )
                 continue
             model.add_lagged_regressor(feat, n_lags=1)
@@ -191,8 +199,16 @@ def _extract_forecast(
     sol_close: pd.Series,
     tz: str = "UTC",
     today_midnight: pd.Timestamp | None = None,
-) -> tuple[pd.DatetimeIndex, np.ndarray, np.ndarray, float,
-           pd.DatetimeIndex, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    pd.DatetimeIndex,
+    np.ndarray,
+    np.ndarray,
+    float,
+    pd.DatetimeIndex,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     """Split forecast into in-data (historic) and future portions.
 
     Returns
@@ -228,32 +244,58 @@ def _extract_forecast(
     n_steps = len(yhat_cols)
     all_step_ts = pd.date_range(
         start=pd.Timestamp(last_known_ds) + pd.Timedelta(hours=1),
-        periods=n_steps, freq="1h",
+        periods=n_steps,
+        freq="1h",
     )
 
-    _tm = today_midnight if today_midnight is not None else pd.Timestamp.now(tz="UTC").normalize()
+    _tm = (
+        today_midnight
+        if today_midnight is not None
+        else pd.Timestamp.now(tz="UTC").normalize()
+    )
     today_midnight_naive = _tm.tz_localize(None) if _tm.tzinfo is not None else _tm
-    today_end_naive      = today_midnight_naive + pd.Timedelta(hours=23)
-    today_mask           = (all_step_ts >= today_midnight_naive) & (all_step_ts <= today_end_naive)
-    today_idx            = np.where(today_mask)[0]
+    today_end_naive = today_midnight_naive + pd.Timedelta(hours=23)
+    today_mask = (all_step_ts >= today_midnight_naive) & (
+        all_step_ts <= today_end_naive
+    )
+    today_idx = np.where(today_mask)[0]
 
     if len(today_idx) == 0 or last_hist_row.empty or not yhat_cols:
-        np_exp    = np.full(24, np.nan)
-        np_lo     = np_exp.copy()
-        np_hi     = np_exp.copy()
+        np_exp = np.full(24, np.nan)
+        np_lo = np_exp.copy()
+        np_hi = np_exp.copy()
         future_ts = pd.DatetimeIndex([], tz=tz)
     else:
-        row    = last_hist_row.iloc[0]
-        np_exp = np.array([row.get(yhat_cols[i], np.nan) for i in today_idx], dtype=float)
-        np_lo  = np.array([row.get(lo_cols[i],   np.nan) for i in today_idx], dtype=float) if lo_cols else np_exp.copy()
-        np_hi  = np.array([row.get(hi_cols[i],   np.nan) for i in today_idx], dtype=float) if hi_cols else np_exp.copy()
+        row = last_hist_row.iloc[0]
+        np_exp = np.array(
+            [row.get(yhat_cols[i], np.nan) for i in today_idx], dtype=float
+        )
+        np_lo = (
+            np.array([row.get(lo_cols[i], np.nan) for i in today_idx], dtype=float)
+            if lo_cols
+            else np_exp.copy()
+        )
+        np_hi = (
+            np.array([row.get(hi_cols[i], np.nan) for i in today_idx], dtype=float)
+            if hi_cols
+            else np_exp.copy()
+        )
         future_ts = pd.DatetimeIndex(all_step_ts[today_mask]).tz_localize(tz)
 
     actual = sol_close.reindex(in_data_ts)
-    valid  = ~(np.isnan(in_data_pred) | actual.isna().values)
-    rmse   = float(np.sqrt(np.mean((in_data_pred[valid] - actual.values[valid]) ** 2)))
+    valid = ~(np.isnan(in_data_pred) | actual.isna().values)
+    rmse = float(np.sqrt(np.mean((in_data_pred[valid] - actual.values[valid]) ** 2)))
 
-    return in_data_ts, in_data_pred, actual.values, rmse, future_ts, np_exp, np_lo, np_hi
+    return (
+        in_data_ts,
+        in_data_pred,
+        actual.values,
+        rmse,
+        future_ts,
+        np_exp,
+        np_lo,
+        np_hi,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,18 +327,22 @@ def run(config: dict) -> dict:
         raise FileNotFoundError("best_features.json missing; run HMM pipeline first")
 
     feature_subset: list[str] = best["feature_subset"]
-    logger.info("Using %d HMM-selected features as lagged regressors", len(feature_subset))
+    logger.info(
+        "Using %d HMM-selected features as lagged regressors", len(feature_subset)
+    )
 
     df_common = load_common_dataframe(config)
-    X_df      = build_feature_matrix(df_common.copy(), feature_subset)
+    X_df = build_feature_matrix(df_common.copy(), feature_subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
     today_midnight = config.get("_today", pd.Timestamp.now(tz="UTC").normalize())
-    cutoff         = config.get("_cutoff", today_midnight - pd.Timedelta(hours=1))
+    cutoff = config.get("_cutoff", today_midnight - pd.Timedelta(hours=1))
     if X_df.index[-1] > cutoff:
-        X_df      = X_df.loc[X_df.index <= cutoff]
+        X_df = X_df.loc[X_df.index <= cutoff]
         sol_close = sol_close.loc[sol_close.index <= cutoff]
-        logger.info("Data capped at %s UTC; forecast covers today 00:00–23:00 UTC", cutoff)
+        logger.info(
+            "Data capped at %s UTC; forecast covers today 00:00–23:00 UTC", cutoff
+        )
     elif X_df.index[-1] < cutoff - pd.Timedelta(hours=23):
         logger.warning(
             "Data ends at %s — stale. Run 'python main.py collect' first.",
@@ -304,63 +350,101 @@ def run(config: dict) -> dict:
         )
 
     # ── Base NP (all available data, no window cap) ───────────────────────────
-    np_df     = _build_np_df(X_df, sol_close, feature_subset)
+    np_df = _build_np_df(X_df, sol_close, feature_subset)
     n_lags_ar = min(168, len(np_df) // 4)
     logger.info(
         "Training NP base (%d rows, AR n_lags=%d, n_forecasts=%d, %d regressors) …",
-        len(np_df), n_lags_ar, _FORECAST_HOURS, len(feature_subset),
+        len(np_df),
+        n_lags_ar,
+        _FORECAST_HOURS,
+        len(feature_subset),
     )
-    base_model     = _train_model(np_df, feature_subset, config)
+    base_model = _train_model(np_df, feature_subset, config)
     base_future_df = _build_future_df(np_df, base_model, feature_subset)
-    base_forecast  = base_model.predict(base_future_df)
+    base_forecast = base_model.predict(base_future_df)
     (
-        in_data_ts, in_data_pred, in_data_actual, in_data_rmse,
-        future_ts, np_exp, np_lo, np_hi,
-    ) = _extract_forecast(base_forecast, np_df, sol_close, today_midnight=today_midnight)
+        in_data_ts,
+        in_data_pred,
+        in_data_actual,
+        in_data_rmse,
+        future_ts,
+        np_exp,
+        np_lo,
+        np_hi,
+    ) = _extract_forecast(
+        base_forecast, np_df, sol_close, today_midnight=today_midnight
+    )
 
-    valid        = ~(np.isnan(in_data_pred) | np.isnan(in_data_actual))
-    base_adj_r2  = _adj_r2(in_data_actual[valid], in_data_pred[valid], len(feature_subset))
-    in_data_adj_r2  = base_adj_r2
+    valid = ~(np.isnan(in_data_pred) | np.isnan(in_data_actual))
+    base_adj_r2 = _adj_r2(
+        in_data_actual[valid], in_data_pred[valid], len(feature_subset)
+    )
+    in_data_adj_r2 = base_adj_r2
     np_plus_features: list[str] = []
 
     # ── NP+ (HMM features + XGB+ additions) ──────────────────────────────────
     plus_candidates = _load_xgb_plus_features(config)
     if plus_candidates:
-        plus_subset = feature_subset + plus_candidates
+        # Exclude features already in the HMM subset — NeuralProphet raises
+        # "Name already used" if add_lagged_regressor is called twice for the
+        # same feature name (e.g. ETH_vol_168h appearing in both sets).
+        hmm_set = set(feature_subset)
+        new_candidates = [f for f in plus_candidates if f not in hmm_set]
+        plus_subset = feature_subset + new_candidates
         try:
-            X_plus    = build_feature_matrix(df_common.copy(), plus_subset)
-            sol_plus  = df_common["SOL_close"].reindex(X_plus.index)
+            X_plus = build_feature_matrix(df_common.copy(), plus_subset)
+            sol_plus = df_common["SOL_close"].reindex(X_plus.index)
             if X_plus.index[-1] > cutoff:
-                X_plus   = X_plus.loc[X_plus.index <= cutoff]
+                X_plus = X_plus.loc[X_plus.index <= cutoff]
                 sol_plus = sol_plus.loc[sol_plus.index <= cutoff]
 
             np_df_plus = _build_np_df(X_plus, sol_plus, plus_subset)
             logger.info(
-                "Training NP+ (%d rows, %d regressors: %d HMM + %d XGB+) …",
-                len(np_df_plus), len(plus_subset), len(feature_subset), len(plus_candidates),
+                "Training NP+ (%d rows, %d regressors: %d HMM + %d new XGB+) …",
+                len(np_df_plus),
+                len(plus_subset),
+                len(feature_subset),
+                len(new_candidates),
             )
-            plus_model     = _train_model(np_df_plus, plus_subset, config)
+            plus_model = _train_model(np_df_plus, plus_subset, config)
             plus_future_df = _build_future_df(np_df_plus, plus_model, plus_subset)
-            plus_forecast  = plus_model.predict(plus_future_df)
+            plus_forecast = plus_model.predict(plus_future_df)
             (
-                p_in_ts, p_in_pred, p_in_actual, p_rmse,
-                p_future_ts, p_exp, p_lo, p_hi,
-            ) = _extract_forecast(plus_forecast, np_df_plus, sol_plus, today_midnight=today_midnight)
+                p_in_ts,
+                p_in_pred,
+                p_in_actual,
+                p_rmse,
+                p_future_ts,
+                p_exp,
+                p_lo,
+                p_hi,
+            ) = _extract_forecast(
+                plus_forecast, np_df_plus, sol_plus, today_midnight=today_midnight
+            )
 
-            p_valid    = ~(np.isnan(p_in_pred) | np.isnan(p_in_actual))
-            plus_adj_r2 = _adj_r2(p_in_actual[p_valid], p_in_pred[p_valid], len(plus_subset))
+            p_valid = ~(np.isnan(p_in_pred) | np.isnan(p_in_actual))
+            plus_adj_r2 = _adj_r2(
+                p_in_actual[p_valid], p_in_pred[p_valid], len(plus_subset)
+            )
 
             logger.info(
                 "NP base adj-R²=%.4f  RMSE=$%.2f  |  NP+ adj-R²=%.4f  RMSE=$%.2f  → using %s",
-                base_adj_r2, in_data_rmse, plus_adj_r2, p_rmse,
+                base_adj_r2,
+                in_data_rmse,
+                plus_adj_r2,
+                p_rmse,
                 "NP+" if plus_adj_r2 > base_adj_r2 else "base",
             )
 
             if plus_adj_r2 > base_adj_r2:
                 in_data_ts, in_data_pred, in_data_actual, in_data_rmse = (
-                    p_in_ts, p_in_pred, p_in_actual, p_rmse)
+                    p_in_ts,
+                    p_in_pred,
+                    p_in_actual,
+                    p_rmse,
+                )
                 future_ts, np_exp, np_lo, np_hi = p_future_ts, p_exp, p_lo, p_hi
-                in_data_adj_r2   = plus_adj_r2
+                in_data_adj_r2 = plus_adj_r2
                 np_plus_features = plus_candidates
 
         except Exception as exc:
@@ -371,21 +455,22 @@ def run(config: dict) -> dict:
         "  in-data RMSE=$%.2f  adj-R²=%.4f",
         float(sol_close.iloc[-1]),
         float(np_exp[-1]) if len(np_exp) and not np.isnan(np_exp[-1]) else 0.0,
-        float(np_lo[-1])  if len(np_lo)  and not np.isnan(np_lo[-1])  else 0.0,
-        float(np_hi[-1])  if len(np_hi)  and not np.isnan(np_hi[-1])  else 0.0,
-        in_data_rmse, in_data_adj_r2,
+        float(np_lo[-1]) if len(np_lo) and not np.isnan(np_lo[-1]) else 0.0,
+        float(np_hi[-1]) if len(np_hi) and not np.isnan(np_hi[-1]) else 0.0,
+        in_data_rmse,
+        in_data_adj_r2,
     )
 
     return {
-        "in_data_ts":       in_data_ts,
-        "in_data_actual":   in_data_actual,
-        "in_data_pred":     in_data_pred,
-        "in_data_rmse":     in_data_rmse,
-        "in_data_adj_r2":   in_data_adj_r2,
-        "future_ts":        future_ts,
-        "np_exp":           np_exp,
-        "np_lo":            np_lo,
-        "np_hi":            np_hi,
+        "in_data_ts": in_data_ts,
+        "in_data_actual": in_data_actual,
+        "in_data_pred": in_data_pred,
+        "in_data_rmse": in_data_rmse,
+        "in_data_adj_r2": in_data_adj_r2,
+        "future_ts": future_ts,
+        "np_exp": np_exp,
+        "np_lo": np_lo,
+        "np_hi": np_hi,
         "np_plus_features": np_plus_features,
-        "sol_last":         float(sol_close.iloc[-1]),
+        "sol_last": float(sol_close.iloc[-1]),
     }
