@@ -62,6 +62,14 @@ Two-module Python pipeline:
                         │  visualize.py       │  3-panel dashboard
                         │  predict_xgb.py     │  XGBoost recursive forecast
                         │  predict_prophet.py │  NeuralProphet forecast
+                        └─────────┬──────────┘
+                                  │
+                        ┌─────────▼──────────┐
+                        │  backtest/          │  Walk-forward evaluation
+                        │  engine.py          │  XGB oracle + 8 strategy variants
+                        │  strategy.py        │  Position sizing + gates + timing
+                        │  timing.py          │  UTC hour×weekday edge analysis
+                        │  report.py          │  PNG + BACKTEST_REPORT.md
                         └────────────────────┘
 ```
 
@@ -90,8 +98,15 @@ src/
 │   ├── predict_prophet.py     ← NeuralProphet direct multi-step (n_forecasts=48)
 │   └── visualize.py           ← 3-panel dashboard; run(config) called from main.py
 │
+├── backtest/
+│   ├── engine.py              ← Template Method: XGB walk-forward + multi-variant strategy
+│   ├── strategy.py            ← RegimeStrategy: position map, discrete mode, composite gate
+│   ├── metrics.py             ← rmse, mae, sharpe, max_drawdown, annualized_return
+│   ├── report.py              ← BACKTEST_REPORT.md + 4-panel PNG
+│   └── timing.py              ← UTC hour×weekday heatmap, block analysis, TIMING_REPORT.md
+│
 └── utils/
-    └── paths.py               ← Central path resolution from settings.yaml
+    └── paths.py               ← raw_dir, models_dir, processed_dir from settings.yaml
 ```
 
 ### Incremental Fetch Sequence
@@ -187,24 +202,33 @@ backtest:
   horizon_hours: 24         # forecast horizon per fold
 
   # One entry per named variant — all run in a single backtest pass
+  # Keys per variant: discrete_trading, trading_window, trailing_stop_pct,
+  #   long_only, xgb_gated, allowed_hours
   strategy_variants:
     hourly:                 # stündliche Evaluation, 24/7, kein Stop
       discrete_trading: null
-      trading_window: null
       trailing_stop_pct: null
       long_only: false
 
     discrete_stop10:        # 3h/6h-Holds 24/7, Stop −10 %
       discrete_trading: [3, 6]   # [min_hold_h, max_hold_h]
-      trading_window: null       # null = 24/7; [6,19] = 06:00–19:00 UTC
       trailing_stop_pct: 10
       long_only: false
 
-    long_only_stop3:        # nur Long (Bullish/Strong Bullish), Stop −3 %
+    long_only_stop3:        # nur Long, Stop −3 %
       discrete_trading: [3, 6]
-      trading_window: null
       trailing_stop_pct: 3
-      long_only: true       # Bearish/Neutral → flat halten, kein Short
+      long_only: true
+
+    hmm_xgb_gated:          # Option C: HMM × XGB direction × HMM persistence
+      discrete_trading: null
+      xgb_gated: true       # halves position on XGB/HMM conflict; scales by persistence
+
+    discrete_gated_timed:   # discrete + Option C + Timing-Filter (Top-3 UTC blocks)
+      discrete_trading: [3, 6]
+      trailing_stop_pct: 10
+      xgb_gated: true
+      allowed_hours: [0, 1, 2, 6, 7, 8, 15, 16, 17]  # 00–03, 06–09, 15–18 UTC
 
 logging:
   level: INFO
@@ -224,8 +248,11 @@ python main.py hmm
 # Both in sequence
 python main.py
 
-# Walk-forward backtest (XGB oracle + HMM regime strategy)
+# Walk-forward backtest (XGB oracle + all strategy variants)
 python main.py backtest
+
+# Timing analysis (UTC hour × weekday edge heatmap + TIMING_REPORT.md)
+python main.py timing
 
 # Visual inspection — 12 panels of raw collected data
 python -m src.collector.inspect

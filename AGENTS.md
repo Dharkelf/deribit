@@ -67,6 +67,8 @@ Do NOT deviate from it without explicit user instruction.
 |---|---|---|
 | collector | `src/collector/` | Deribit API client, VIX via yfinance, incremental Parquet storage (on-demand, no scheduler) |
 | hmm | `src/hmm/` | Feature engineering, GaussianHMM, Bayesian optimization, K-Fold evaluation |
+| backtest | `src/backtest/` | Walk-forward XGB evaluation, multi-variant regime strategy, timing analysis |
+| utils | `src/utils/` | Central path helpers (raw_dir, models_dir, processed_dir) |
 
 ---
 
