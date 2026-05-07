@@ -450,14 +450,13 @@ def generate(
             f"| {regime} | ${row['rmse']:.2f} | ${row['mae']:.2f} | {da_str} | {int(row['folds'])} |"
         )
 
-    stop_active  = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
-    n_stopped    = int(strategy_df["stopped"].sum()) if stop_active else 0
-    stop_pct_cfg = bt_cfg.get("trailing_stop_pct")
-    stop_note    = (
-        f"> Trailing Stop: −{stop_pct_cfg} % vom Trade-Einstieg → "
+    stop_active = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
+    n_stopped   = int(strategy_df["stopped"].sum()) if stop_active else 0
+    stop_note   = (
+        f"> Trailing Stop aktiv ({primary_name}) → "
         f"{n_stopped:,} Stunden gesperrt ({100 * n_stopped / max(len(strategy_df), 1):.1f} %)."
         if stop_active else
-        "> Kein Trailing Stop aktiv."
+        "> Kein Trailing Stop aktiv (primäre Variante)."
     )
 
     lines += [
@@ -495,27 +494,56 @@ def generate(
         lines.append(
             f"| {vname} | {vann:.1%} | {vsp:.2f} | {vmdd:.1%} | {vact:,} | {vstop:,} |"
         )
+    # Build all-year index across all variants
+    all_years = sorted({y for ys in yearly_stats.values() for y in ys.index})
+
+    # Column headers: SOL B&H once, then one column per variant
+    variant_names = list(yearly_stats.keys())
+    header_cols   = " | ".join(f"{n} Ret | {n} Sharpe" for n in variant_names)
+    sep_cols = "|---|---|" + "|---|---|" * len(variant_names)
+
     lines += [
         "",
         "---",
         "",
         "## 5. Jahresweise Strategie-Entwicklung",
         "",
-        "> Jahresrenditen (nicht annualisiert). Aktive Stunden = Position ≠ 0.",
-        "> Einträge = Positionswechsel in neuen Trade.",
+        "> SOL B&H = reines Kaufen und Halten von SOL/USD ohne Strategie (Benchmark).",
+        "> Renditen nicht annualisiert (Kalenderjahr). Sharpe annualisiert.",
         "",
-        "| Jahr | SOL B&H | Strategie | Sharpe | Max DD | Aktiv h | Einträge | Dom. Regime |",
-        "|---|---|---|---|---|---|---|---|",
+        f"| Jahr | SOL B&H | {header_cols} |",
+        sep_cols,
     ]
 
+    for year in all_years:
+        # B&H return from primary variant (same underlying series for all)
+        bnh_ret = yearly_strat.loc[year, "bnh_ret"] if year in yearly_strat.index else float("nan")
+        bnh_str = f"{bnh_ret:+.0%}" if not (isinstance(bnh_ret, float) and np.isnan(bnh_ret)) else "n/a"
+        row_parts = [f"| {year} | {bnh_str}"]
+        for vname in variant_names:
+            ys = yearly_stats[vname]
+            if year in ys.index:
+                vret = ys.loc[year, "strat_ret"]
+                vsp  = ys.loc[year, "sharpe"]
+                row_parts.append(f"| {vret:+.0%} | {vsp:.2f}")
+            else:
+                row_parts.append("| — | —")
+        lines.append(" ".join(row_parts) + " |")
+
+    lines += [
+        "",
+        "### Jahresweise Details — primäre Variante",
+        "",
+        f"> Primär: **{primary_name}**. Aktive Stunden = Position ≠ 0. Einträge = neue Trade-Einsteige.",
+        "",
+        "| Jahr | Strategie | Max DD | Aktiv h | Einträge | Dom. Regime |",
+        "|---|---|---|---|---|---|",
+    ]
     for year in sorted(yearly_strat.index):
         row = yearly_strat.loc[year]
-        xgb_row = yearly_xgb.loc[year] if year in yearly_xgb.index else None
         lines.append(
             f"| {year} "
-            f"| {row['bnh_ret']:+.0%} "
             f"| {row['strat_ret']:+.0%} "
-            f"| {row['sharpe']:.2f} "
             f"| {row['mdd']:.0%} "
             f"| {int(row['active_h']):,} "
             f"| {int(row['entries'])} "

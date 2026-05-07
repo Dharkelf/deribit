@@ -185,10 +185,26 @@ backtest:
   min_train_days: 30        # minimum training window per fold
   step_days: 7              # walk-forward step size (weekly)
   horizon_hours: 24         # forecast horizon per fold
-  trailing_stop_pct: 15     # trailing stop: zero position when equity drops >X % from peak
-                            # set to null to disable
-  trading_hours: null       # UTC hour range [start, end) e.g. [8, 18] = 08:00–17:59 UTC
-                            # null = 24/7 (no filter); applied before trailing stop
+
+  # One entry per named variant — all run in a single backtest pass
+  strategy_variants:
+    hourly:                 # stündliche Evaluation, 24/7, kein Stop
+      discrete_trading: null
+      trading_window: null
+      trailing_stop_pct: null
+      long_only: false
+
+    discrete_stop10:        # 3h/6h-Holds 24/7, Stop −10 %
+      discrete_trading: [3, 6]   # [min_hold_h, max_hold_h]
+      trading_window: null       # null = 24/7; [6,19] = 06:00–19:00 UTC
+      trailing_stop_pct: 10
+      long_only: false
+
+    long_only_stop3:        # nur Long (Bullish/Strong Bullish), Stop −3 %
+      discrete_trading: [3, 6]
+      trading_window: null
+      trailing_stop_pct: 3
+      long_only: true       # Bearish/Neutral → flat halten, kein Short
 
 logging:
   level: INFO

@@ -180,7 +180,7 @@ Rules:
 | Storage | `pyarrow`, `pandas` |
 | VIX data | `yfinance` |
 | HTTP client | `httpx` |
-| Config | `pyyaml`, `python-dotenv` |
+| Config | `pyyaml` |
 
 ---
 
