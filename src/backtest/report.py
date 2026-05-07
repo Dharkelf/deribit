@@ -96,7 +96,7 @@ def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list
         )
 
     # RMSE spike detection
-    fold_rmse = h1.groupby("fold_id").apply(
+    fold_rmse = h1.groupby("fold_id")[["actual", "xgb_pred"]].apply(
         lambda g: rmse(g["actual"].values, g["xgb_pred"].values)
     )
     if len(fold_rmse) > 5:
@@ -157,7 +157,7 @@ def generate(
     ann_bnh  = annualized_return(strategy_df["bnh_lr"].values)
 
     regime_metrics = (
-        h1.groupby("regime")
+        h1.groupby("regime")[["fold_id", "actual", "xgb_pred"]]
         .apply(
             lambda g: pd.Series(
                 {
@@ -171,7 +171,7 @@ def generate(
         .reindex([r for r in _REGIME_ORDER if r in h1["regime"].unique()])
     )
 
-    fold_rmse_by_fold = h1.groupby("fold_id").apply(
+    fold_rmse_by_fold = h1.groupby("fold_id")[["actual", "xgb_pred"]].apply(
         lambda g: pd.Series(
             {
                 "date": g.index.min(),
