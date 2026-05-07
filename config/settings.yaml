@@ -13,8 +13,9 @@ collector:
   history_days: 1800          # 5-year backfill window in days
 
 storage:
-  raw_dir: data/raw           # Parquet output directory
-  models_dir: data/processed/models  # fitted model artefacts
+  raw_dir: data/raw                       # Parquet output directory
+  models_dir: data/processed/models       # fitted model artefacts
+  processed_dir: data/processed           # forecast charts and backtest outputs
 
 options:
   max_pain_days_ahead: 30         # long window for Max Pain mean (calendar days)

@@ -35,9 +35,11 @@ def test_fetch_returns_hourly_dataframe(mock_download: object) -> None:
     assert len(df) >= 24
 
 
+@patch("src.collector.vix_client._fetch_vix_fred")
 @patch("src.collector.vix_client.yf.download")
-def test_fetch_empty_response(mock_download: object) -> None:
+def test_fetch_empty_response(mock_download: object, mock_fred: object) -> None:
     mock_download.return_value = pd.DataFrame()
+    mock_fred.return_value = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     client = VixClient()
     df = client.fetch_ohlcv(_utc(2024, 1, 2), _utc(2024, 1, 3))
 

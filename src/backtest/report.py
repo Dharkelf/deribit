@@ -134,7 +134,7 @@ def generate(
     config: dict,
 ) -> None:
     """Save Parquet + 4-panel PNG + BACKTEST_REPORT.md to data/processed/."""
-    out_dir = Path(config.get("paths", {}).get("processed_dir", "data/processed"))
+    out_dir = Path(config.get("storage", {}).get("processed_dir", "data/processed"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Parquet ────────────────────────────────────────────────────────────────

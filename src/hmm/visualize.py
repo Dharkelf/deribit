@@ -561,7 +561,7 @@ def run(config: dict) -> None:
         color="white", fontsize=10, loc="left", pad=8,
     )
 
-    out_dir = Path(config.get("paths", {}).get("processed_dir", "data/processed"))
+    out_dir = Path(config.get("storage", {}).get("processed_dir", "data/processed"))
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "sol_forecast.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
