@@ -149,7 +149,7 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
 
     # Pre-compute for Option C: 24-step HMM transition matrix + integer state series
     state_series = pd.Series(labels, index=X_hmm.index)
-    trans_24 = np.linalg.matrix_power(model.transmat_, 24)
+    trans_24 = np.linalg.matrix_power(model._model.transmat_, 24)
 
     xgb_direction_at: dict[pd.Timestamp, float] = {}
     persistence_at: dict[pd.Timestamp, float] = {}
