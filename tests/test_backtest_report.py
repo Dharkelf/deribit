@@ -107,10 +107,11 @@ def test_generate_parquet_roundtrip(tmp_path):
 def test_generate_markdown_has_required_sections(tmp_path):
     generate(_make_fold_df(), _make_strategy_df(), _minimal_config(tmp_path))
     md = (tmp_path / "BACKTEST_REPORT.md").read_text()
-    assert "## 1. Datenbasis"        in md
-    assert "## 2. Forecast-Accuracy" in md
-    assert "## 3. Regime-Strategie"  in md
-    assert "## 4. Verbesserungsideen" in md
+    assert "## 1. Datenbasis"                   in md
+    assert "## 2. Forecast-Accuracy"            in md
+    assert "## 3. Regime-Strategie"             in md
+    assert "## 4. Jahresweise"                  in md
+    assert "## 5. Verbesserungsideen"           in md
 
 
 def test_generate_markdown_shows_trading_hours(tmp_path):

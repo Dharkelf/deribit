@@ -70,6 +70,16 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         (int(_th_raw[0]), int(_th_raw[1])) if _th_raw else None
     )
 
+    _dt_raw = bt_cfg.get("discrete_trading")
+    discrete_trading: tuple[int, int] | None = (
+        (int(_dt_raw[0]), int(_dt_raw[1])) if _dt_raw else None
+    )
+
+    _tw_raw = bt_cfg.get("trading_window")
+    trading_window: tuple[int, int] | None = (
+        (int(_tw_raw[0]), int(_tw_raw[1])) if _tw_raw else None
+    )
+
     # ── Data & model ──────────────────────────────────────────────────────────
     best = load_best_features(config)
     if best is None:
@@ -110,8 +120,20 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         sol_lr, label_series,
         trailing_stop_pct=trailing_stop_pct,
         trading_hours=trading_hours,
+        discrete_trading=discrete_trading,
+        trading_window=trading_window,
     )
-    if trading_hours is not None:
+    if discrete_trading is not None:
+        n_off   = int(strategy_df["off_hours"].sum())
+        n_active = int((strategy_df["position"] != 0).sum())
+        win = trading_window or (0, 24)
+        logger.info(
+            "Discrete trading %dh/%dh  window %02d:00–%02d:00 UTC: "
+            "%d active hours  %d off-window hours",
+            discrete_trading[0], discrete_trading[1],
+            win[0], win[1], n_active, n_off,
+        )
+    elif trading_hours is not None:
         n_off = int(strategy_df["off_hours"].sum())
         logger.info(
             "Trading hours %02d:00–%02d:00 UTC: %d hours filtered out (%.1f %%)",

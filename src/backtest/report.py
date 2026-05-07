@@ -44,7 +44,6 @@ _REGIME_COLORS: dict[str, str] = {
     "Strong Bullish": "#1e8449",
 }
 
-# Canonical ordering for consistent bar-chart layout
 _REGIME_ORDER = ["Strong Bearish", "Bearish", "Neutral", "Bullish", "Strong Bullish"]
 
 
@@ -56,7 +55,66 @@ def _style(ax: plt.Axes) -> None:
     ax.spines[["top", "right", "left", "bottom"]].set_color(_SPINE)
 
 
-def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list[str]:
+# ── Year-by-year helpers ──────────────────────────────────────────────────────
+
+def _yearly_strategy_stats(strategy_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-year strategy metrics derived from strategy_df."""
+    records = []
+    for year, grp in strategy_df.groupby(strategy_df.index.year):
+        lr      = grp["strategy_lr"].values
+        bnh     = grp["bnh_lr"].values
+        eq      = grp["equity_strategy"].values
+        pos     = grp["position"].values
+
+        total_ret = float(np.exp(lr.sum()) - 1)
+        bnh_ret   = float(np.exp(bnh.sum()) - 1)
+        sp        = sharpe(lr)
+        mdd       = max_drawdown(eq)
+        active_h  = int((pos != 0).sum())
+        total_h   = len(grp)
+
+        # Count trade entries: position transitions from zero/different to nonzero
+        pos_s    = pd.Series(pos)
+        entries  = int(((pos_s != 0) & (pos_s != pos_s.shift(1))).sum())
+
+        dominant = grp["regime"].mode().iloc[0] if len(grp) > 0 else "—"
+
+        records.append({
+            "year":       int(year),
+            "strat_ret":  total_ret,
+            "bnh_ret":    bnh_ret,
+            "sharpe":     sp,
+            "mdd":        mdd,
+            "active_h":   active_h,
+            "total_h":    total_h,
+            "entries":    entries,
+            "dominant":   dominant,
+        })
+    return pd.DataFrame(records).set_index("year")
+
+
+def _yearly_xgb_stats(fold_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-year XGB metrics derived from fold_df (horizon_h == 1 only)."""
+    h1 = fold_df[fold_df["horizon_h"] == 1].copy()
+    h1["year"] = h1.index.year
+    records = []
+    for year, grp in h1.groupby("year"):
+        records.append({
+            "year":    int(year),
+            "rmse":    rmse(grp["actual"].values, grp["xgb_pred"].values),
+            "da":      directional_accuracy(grp["actual"].values, grp["xgb_pred"].values),
+            "n_folds": int(grp["fold_id"].nunique()),
+        })
+    return pd.DataFrame(records).set_index("year")
+
+
+# ── Improvement ideas ─────────────────────────────────────────────────────────
+
+def _improvement_ideas(
+    fold_df: pd.DataFrame,
+    strategy_df: pd.DataFrame,
+    yearly_strat: pd.DataFrame | None = None,
+) -> list[str]:
     ideas: list[str] = []
     h1 = fold_df[fold_df["horizon_h"] == 1]
 
@@ -100,12 +158,42 @@ def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list
         lambda g: rmse(g["actual"].values, g["xgb_pred"].values)
     )
     if len(fold_rmse) > 5:
-        mu, sig   = fold_rmse.mean(), fold_rmse.std()
-        n_spikes  = int((fold_rmse > mu + 2 * sig).sum())
+        mu, sig  = fold_rmse.mean(), fold_rmse.std()
+        n_spikes = int((fold_rmse > mu + 2 * sig).sum())
         if n_spikes > 0:
             ideas.append(
                 f"{n_spikes} Folds mit RMSE > μ+2σ (>${mu + 2 * sig:.2f}) "
                 f"→ Volatility-Regime als Conditioning-Variable oder Volatility-Scaling prüfen"
+            )
+
+    # Year-based insights
+    if yearly_strat is not None and len(yearly_strat) >= 2:
+        worst_year = yearly_strat["strat_ret"].idxmin()
+        worst_ret  = yearly_strat.loc[worst_year, "strat_ret"]
+        if worst_ret < -0.10:
+            dominant = yearly_strat.loc[worst_year, "dominant"]
+            ideas.append(
+                f"{worst_year} war das schlechteste Jahr ({worst_ret:.0%}, "
+                f"Dominant-Regime: {dominant}) → Regime-Transition-Logik für "
+                f"'{dominant}' überprüfen"
+            )
+
+        # Years where BnH beat strategy
+        underperform_years = yearly_strat[
+            yearly_strat["strat_ret"] < yearly_strat["bnh_ret"]
+        ].index.tolist()
+        if underperform_years:
+            ideas.append(
+                f"Strategie unterbot Buy-and-Hold in {underperform_years} → "
+                f"Positionsgröße in Bullish-Phasen erhöhen oder Regime-Schwelle prüfen"
+            )
+
+        # Low activity warning
+        avg_active_pct = (yearly_strat["active_h"] / yearly_strat["total_h"]).mean()
+        if avg_active_pct < 0.25:
+            ideas.append(
+                f"Durchschnittlich nur {avg_active_pct:.0%} der Stunden aktiv → "
+                f"Halteperiode verlängern oder min_hold_hours reduzieren"
             )
 
     # NP reminder
@@ -115,8 +203,8 @@ def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list
         "Für separate NP-Evaluation: python main.py hmm (produziert NP-Forecast)."
     )
 
-    # 3-year backfill recommendation if history < 700 days
-    days = (fold_df.index.max() - fold_df.index.min()).days
+    # 3-year backfill recommendation
+    days    = (fold_df.index.max() - fold_df.index.min()).days
     n_folds = fold_df["fold_id"].nunique()
     if days < 700:
         ideas.append(
@@ -180,12 +268,14 @@ def generate(
         )
     ).reset_index(drop=True)
 
+    yearly_strat = _yearly_strategy_stats(strategy_df)
+    yearly_xgb   = _yearly_xgb_stats(fold_df)
+
     # ── 4-panel PNG ───────────────────────────────────────────────────────────
     fig, axes = plt.subplots(2, 2, figsize=(17, 12))
     fig.patch.set_facecolor(_BG)
     (ax1, ax2), (ax3, ax4) = axes
 
-    # Panel 1 — Cumulative equity: strategy vs buy-and-hold
     _style(ax1)
     ax1.plot(
         strategy_df.index, strategy_df["equity_strategy"],
@@ -205,7 +295,6 @@ def generate(
     ax1.legend(fontsize=8, framealpha=0.15, labelcolor="white",
                facecolor="#1a1a1a", edgecolor=_SPINE)
 
-    # Panel 2 — XGB RMSE per fold (time series)
     _style(ax2)
     if not fold_rmse_by_fold.empty:
         ax2.bar(
@@ -223,7 +312,6 @@ def generate(
     ax2.legend(fontsize=8, framealpha=0.15, labelcolor="white",
                facecolor="#1a1a1a", edgecolor=_SPINE)
 
-    # Panel 3 — Directional accuracy per regime (bar chart)
     _style(ax3)
     if not regime_metrics.empty and "dir_acc" in regime_metrics.columns:
         regimes = list(regime_metrics.index)
@@ -241,7 +329,6 @@ def generate(
     ax3.legend(fontsize=8, framealpha=0.15, labelcolor="white",
                facecolor="#1a1a1a", edgecolor=_SPINE)
 
-    # Panel 4 — RMSE / MAE per regime (grouped bar chart)
     _style(ax4)
     if not regime_metrics.empty:
         x   = np.arange(len(regime_metrics))
@@ -267,7 +354,7 @@ def generate(
     logger.info("Backtest plot → %s", png_path)
 
     # ── BACKTEST_REPORT.md ────────────────────────────────────────────────────
-    ideas    = _improvement_ideas(fold_df, strategy_df)
+    ideas    = _improvement_ideas(fold_df, strategy_df, yearly_strat=yearly_strat)
     start_ts = fold_df.index.min().strftime("%Y-%m-%d")
     end_ts   = fold_df.index.max().strftime("%Y-%m-%d")
     n_folds  = int(fold_df["fold_id"].nunique())
@@ -276,11 +363,24 @@ def generate(
 
     regime_dist = h1.groupby("regime").size()
 
-    th_raw  = bt_cfg.get("trading_hours")
-    th_str  = f"{th_raw[0]:02d}:00–{th_raw[1]:02d}:00 UTC" if th_raw else "24/7 (kein Filter)"
-    off_h   = int(strategy_df["off_hours"].sum()) if "off_hours" in strategy_df.columns else 0
-    total_h = len(strategy_df)
-    active_h = total_h - off_h
+    # Trading mode description
+    dt_raw = bt_cfg.get("discrete_trading")
+    tw_raw = bt_cfg.get("trading_window")
+    th_raw = bt_cfg.get("trading_hours")
+    if dt_raw:
+        mode_str = (
+            f"Diskret {dt_raw[0]}h/{dt_raw[1]}h  "
+            f"Fenster {tw_raw[0]:02d}:00–{tw_raw[1]:02d}:00 UTC"
+            if tw_raw else f"Diskret {dt_raw[0]}h/{dt_raw[1]}h  24/7"
+        )
+    elif th_raw:
+        mode_str = f"{th_raw[0]:02d}:00–{th_raw[1]:02d}:00 UTC"
+    else:
+        mode_str = "Stündlich 24/7"
+
+    off_h    = int(strategy_df["off_hours"].sum()) if "off_hours" in strategy_df.columns else 0
+    total_h  = len(strategy_df)
+    active_h = int((strategy_df["position"] != 0).sum())
 
     lines: list[str] = [
         f"# Backtest Report — {now_str}",
@@ -292,9 +392,10 @@ def generate(
         f"| Zeitraum | {start_ts} → {end_ts} |",
         f"| Folds | {n_folds} (Step {bt_cfg.get('step_days', 7)}d, Horizont {bt_cfg.get('horizon_hours', 24)}h) |",
         f"| Mindest-Trainingsfenster | {bt_cfg.get('min_train_days', 30)} Tage |",
-        f"| Trading Hours (Option B) | {th_str} — {active_h:,} aktive / {total_h:,} gesamt Stunden |",
+        f"| Trading-Modus (Option B) | {mode_str} |",
+        f"| Aktive Stunden | {active_h:,} / {total_h:,} ({100 * active_h / max(total_h, 1):.1f} %) |",
         f"| Modelle | XGB walk-forward (A) + HMM Regime-Strategie (B) |",
-        f"| NeuralProphet | ausgeschlossen — NP+ Shape-Bug + ~55 s/Fold |",
+        f"| NeuralProphet | ausgeschlossen — NP+ Shape-Bug behoben, ~55 s/Fold |",
         "",
         "### Regime-Verteilung an Fold-Startpunkten",
         "",
@@ -331,11 +432,11 @@ def generate(
             f"| {regime} | ${row['rmse']:.2f} | ${row['mae']:.2f} | {da_str} | {int(row['folds'])} |"
         )
 
-    stop_active   = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
-    n_stopped     = int(strategy_df["stopped"].sum()) if stop_active else 0
-    stop_pct_cfg  = bt_cfg.get("trailing_stop_pct")
-    stop_note     = (
-        f"> Trailing Stop: −{stop_pct_cfg} % vom Peak → "
+    stop_active  = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
+    n_stopped    = int(strategy_df["stopped"].sum()) if stop_active else 0
+    stop_pct_cfg = bt_cfg.get("trailing_stop_pct")
+    stop_note    = (
+        f"> Trailing Stop: −{stop_pct_cfg} % vom Trade-Einstieg → "
         f"{n_stopped:,} Stunden gesperrt ({100 * n_stopped / max(len(strategy_df), 1):.1f} %)."
         if stop_active else
         "> Kein Trailing Stop aktiv."
@@ -351,7 +452,7 @@ def generate(
         "> Look-ahead-Bias bei Regime-Labels. Echte Performance wird schlechter sein.",
         "> Positionsmap: Strong Bullish=+1.0, Bullish=+0.5, Neutral=0, Bearish=−0.5, Strong Bearish=−1.0.",
         "> Keine Transaktionskosten modelliert.",
-        f"> Trading Hours: {th_str}.",
+        f"> Trading-Modus: {mode_str}.",
         stop_note,
         "",
         "| Metrik | Strategie | Buy-and-Hold |",
@@ -362,7 +463,48 @@ def generate(
         "",
         "---",
         "",
-        "## 4. Verbesserungsideen",
+        "## 4. Jahresweise Strategie-Entwicklung",
+        "",
+        "> Jahresrenditen (nicht annualisiert). Aktive Stunden = Position ≠ 0.",
+        "> Einträge = Positionswechsel in neuen Trade.",
+        "",
+        "| Jahr | SOL B&H | Strategie | Sharpe | Max DD | Aktiv h | Einträge | Dom. Regime |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+
+    for year in sorted(yearly_strat.index):
+        row = yearly_strat.loc[year]
+        xgb_row = yearly_xgb.loc[year] if year in yearly_xgb.index else None
+        lines.append(
+            f"| {year} "
+            f"| {row['bnh_ret']:+.0%} "
+            f"| {row['strat_ret']:+.0%} "
+            f"| {row['sharpe']:.2f} "
+            f"| {row['mdd']:.0%} "
+            f"| {int(row['active_h']):,} "
+            f"| {int(row['entries'])} "
+            f"| {row['dominant']} |"
+        )
+
+    lines += [
+        "",
+        "### Jahresweise XGB-Forecast-Genauigkeit",
+        "",
+        "| Jahr | RMSE | Dir. Accuracy | Folds |",
+        "|---|---|---|---|",
+    ]
+    for year in sorted(yearly_xgb.index):
+        row = yearly_xgb.loc[year]
+        da_s = f"{row['da']:.1%}" if not np.isnan(row["da"]) else "n/a"
+        lines.append(
+            f"| {year} | ${row['rmse']:.2f} | {da_s} | {int(row['n_folds'])} |"
+        )
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## 5. Verbesserungsideen",
         "",
     ]
     for i, idea in enumerate(ideas, 1):

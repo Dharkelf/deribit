@@ -366,3 +366,140 @@ def test_timestamp_regime_lookup_x_df_ahead_of_x_hmm():
 
     assert ts_regime   == "Bullish"   # correct
     assert positional_regime == "Neutral"  # what the old code returned (wrong)
+
+
+# ── discrete trading ──────────────────────────────────────────────────────────
+
+def _make_discrete_inputs(
+    n: int = 48,
+    regime: str = "Bullish",
+    lr_val: float = 0.001,
+    start: str = "2026-01-01 06:00",
+) -> tuple[pd.Series, pd.Series]:
+    idx    = pd.date_range(start, periods=n, freq="1h", tz="UTC")
+    lr     = pd.Series([lr_val] * n, index=idx)
+    labels = pd.Series([regime] * n, index=idx)
+    return lr, labels
+
+
+def test_discrete_holds_for_min_hours_weak_regime():
+    """Weak regime → position fixed for min_hold_h hours then re-evaluated."""
+    lr, labels = _make_discrete_inputs(n=12, regime="Bullish", lr_val=0.001)
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+    )
+    pos = result["position"].values
+    # Hours 0-2 (06:00-08:00): first hold, position=0.5
+    assert np.all(pos[:3] == pytest.approx(0.5))
+    # Hours 3-5 (09:00-11:00): second hold, same regime → same position
+    assert np.all(pos[3:6] == pytest.approx(0.5))
+
+
+def test_discrete_holds_for_max_hours_strong_regime():
+    """Strong regime → position fixed for max_hold_h hours."""
+    lr, labels = _make_discrete_inputs(n=12, regime="Strong Bullish", lr_val=0.001)
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+    )
+    pos = result["position"].values
+    # First 6 hours: one hold block, all position=1.0
+    assert np.all(pos[:6] == pytest.approx(1.0))
+
+
+def test_discrete_zeros_outside_trading_window():
+    """Position must be 0 outside the trading window."""
+    # Start at 04:00 UTC — first 2 hours are outside [6, 19)
+    lr, labels = _make_discrete_inputs(n=20, regime="Bullish", start="2026-01-01 04:00")
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+    )
+    off = result["off_hours"].values
+    pos = result["position"].values
+    # Hours before window start must be off_hours and position=0
+    assert np.all(off[:2])
+    assert np.all(pos[:2] == pytest.approx(0.0))
+
+
+def test_discrete_position_zero_after_window_ends():
+    """After window closes (19:00 UTC) position must be 0."""
+    # 13 hours starting at 10:00 → 10,11,...,22 UTC; window closes at 19
+    lr, labels = _make_discrete_inputs(n=13, regime="Bullish", start="2026-01-01 10:00")
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+    )
+    pos = result["position"].values
+    # Last entries (19:00+) must be 0
+    hours = result.index.hour.values
+    assert np.all(pos[hours >= 19] == pytest.approx(0.0))
+
+
+def test_discrete_stop_fires_mid_hold():
+    """Trailing stop must fire within a hold period on large losses."""
+    # Strong Bullish, position=+1.0, large negative returns → stop must fire
+    lr, labels = _make_discrete_inputs(
+        n=12, regime="Strong Bullish", lr_val=-0.10,
+    )
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(6, 6),
+        trading_window=(6, 19),
+        trailing_stop_pct=15,
+    )
+    # Stop must fire during the 6-hour hold
+    assert result["stopped"].any()
+    # Once stopped, strategy_lr must be 0
+    stopped_rows = result[result["stopped"]]
+    assert np.allclose(stopped_rows["strategy_lr"].values, 0.0, atol=1e-12)
+
+
+def test_discrete_peak_resets_at_new_trade():
+    """Peak resets at each trade entry: stop from prior trade does not carry over."""
+    # Two 3-hour holds: first has large loss (stop fires), second has small gain
+    # If peak did NOT reset, second trade would be stopped immediately
+    n      = 12
+    idx    = pd.date_range("2026-01-01 06:00", periods=n, freq="1h", tz="UTC")
+    lr_val = [-0.10] * 6 + [0.001] * 6   # first 6h: big loss; next 6h: small gain
+    lr     = pd.Series(lr_val, index=idx)
+    labels = pd.Series(["Strong Bullish"] * n, index=idx)
+
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(6, 6),
+        trading_window=(6, 19),
+        trailing_stop_pct=15,
+    )
+    # Second hold (hours 6-11): peak resets → stop should NOT be active immediately
+    second_hold = result.iloc[6:]
+    # At least the first hour of second hold must not be stopped
+    assert not result.iloc[6]["stopped"]
+
+
+def test_discrete_neutral_regime_zero_position():
+    """Neutral regime → position=0 in discrete mode too."""
+    lr, labels = _make_discrete_inputs(n=12, regime="Neutral", lr_val=0.001)
+    result = RegimeStrategy().apply(
+        lr, labels,
+        discrete_trading=(3, 6),
+        trading_window=(6, 19),
+    )
+    pos = result["position"]
+    assert np.all(pos[result["off_hours"] == False].values == pytest.approx(0.0))  # noqa: E712
+
+
+def test_discrete_hourly_mode_unchanged():
+    """When discrete_trading=None, hourly mode is used (no regression)."""
+    lr, labels = _make_discrete_inputs(n=24, regime="Bullish", lr_val=0.001)
+    r_hourly   = RegimeStrategy().apply(lr, labels)
+    r_discrete = RegimeStrategy().apply(
+        lr, labels, discrete_trading=(3, 6), trading_window=(6, 19)
+    )
+    # In hourly mode every hour is active; discrete mode has off-hours zeros
+    assert r_hourly["position"].sum() > r_discrete["position"].sum()
