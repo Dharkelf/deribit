@@ -1,7 +1,6 @@
 """Backtesting metrics — forecast accuracy and strategy performance."""
 
 import numpy as np
-import pandas as pd
 
 
 def rmse(actual: np.ndarray, predicted: np.ndarray) -> float:

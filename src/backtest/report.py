@@ -28,8 +28,6 @@ from .metrics import (
     rmse,
     sharpe,
 )
-from .strategy import RegimeStrategy
-
 logger = logging.getLogger(__name__)
 
 _BG       = "#0f0f0f"

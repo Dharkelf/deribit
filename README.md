@@ -162,11 +162,12 @@ symbols:
 
 collector:
   resolution: 60          # candle interval in minutes (60 = 1h)
-  history_days: 365       # initial backfill window
+  history_days: 1800      # backfill window in days (5 years)
 
 storage:
   raw_dir: data/raw
   models_dir: data/processed/models
+  processed_dir: data/processed   # forecast charts and backtest outputs
 
 options:
   max_pain_days_ahead: 30       # expiry window for Max Pain mean (calendar days)
@@ -179,6 +180,15 @@ hmm:
   random_state: 42
   covariance_type: full
   n_iter: 200               # max EM iterations per fit
+
+backtest:
+  min_train_days: 30        # minimum training window per fold
+  step_days: 7              # walk-forward step size (weekly)
+  horizon_hours: 24         # forecast horizon per fold
+  trailing_stop_pct: 15     # trailing stop: zero position when equity drops >X % from peak
+                            # set to null to disable
+  trading_hours: null       # UTC hour range [start, end) e.g. [8, 18] = 08:00–17:59 UTC
+                            # null = 24/7 (no filter); applied before trailing stop
 
 logging:
   level: INFO

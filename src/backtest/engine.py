@@ -23,7 +23,6 @@ NeuralProphet excluded: ~55 s/fold + active shape bug in NP+ evaluation.
 """
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -32,7 +31,6 @@ from src.hmm.features import build_feature_matrix, load_common_dataframe
 from src.hmm.model import GaussianHMMModel
 from src.hmm.optimizer import load_best_features
 from src.hmm.predict_xgb import (
-    _adj_r2,
     _build_train_data,
     _filter_24h_features,
     _train_model,
@@ -40,7 +38,7 @@ from src.hmm.predict_xgb import (
 from src.hmm.visualize import _assign_regime_colors_and_labels
 from src.utils.paths import models_dir
 
-from .metrics import directional_accuracy, mae, rmse
+from .metrics import rmse
 from .strategy import RegimeStrategy
 
 logger = logging.getLogger(__name__)
