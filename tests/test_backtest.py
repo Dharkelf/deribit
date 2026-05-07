@@ -141,6 +141,75 @@ def test_strategy_unknown_regime_maps_to_zero():
     assert (result["position"] == 0.0).all()
 
 
+def test_strategy_stopped_column_absent_without_stop():
+    lr, labels = _make_inputs()
+    result = RegimeStrategy().apply(lr, labels)
+    assert "stopped" in result.columns
+    assert not result["stopped"].any()
+
+
+def test_trailing_stop_none_is_equivalent_to_no_stop():
+    lr, labels = _make_inputs(n=50, regime="Bullish")
+    r_no_stop = RegimeStrategy().apply(lr, labels)
+    r_none    = RegimeStrategy().apply(lr, labels, trailing_stop_pct=None)
+    assert (r_no_stop["position"].values == r_none["position"].values).all()
+
+
+def test_trailing_stop_fires_on_large_drawdown():
+    """Sustained losses should trigger the stop, forcing position to zero."""
+    idx    = pd.date_range("2026-01-01", periods=40, freq="1h", tz="UTC")
+    # Strong Bullish (+1 position) with large losses every step → stop fires
+    lr     = pd.Series([-0.05] * 40, index=idx)      # −5 % per hour compounded
+    labels = pd.Series(["Strong Bullish"] * 40, index=idx)
+    result = RegimeStrategy().apply(lr, labels, trailing_stop_pct=15)
+    # After enough losses the stop must have fired: some hours stopped
+    assert result["stopped"].any()
+    # All hours after stop fires must have position 0 (within same regime phase)
+    stopped_idx = result.index[result["stopped"]]
+    assert (result.loc[stopped_idx, "position"] == 0.0).all()
+
+
+def test_trailing_stop_resets_on_regime_change():
+    """After a regime change the position should resume (stop cleared)."""
+    idx = pd.date_range("2026-01-01", periods=60, freq="1h", tz="UTC")
+    lr  = pd.Series([-0.05] * 60, index=idx)
+
+    # First 30 hours: Strong Bullish (stop fires) → next 30: Bullish (stop clears)
+    labels = pd.Series(
+        ["Strong Bullish"] * 30 + ["Bullish"] * 30, index=idx
+    )
+    result = RegimeStrategy().apply(lr, labels, trailing_stop_pct=15)
+
+    # Stop must fire during first regime phase
+    assert result.loc[result.index[:30], "stopped"].any()
+
+    # After regime change the first few hours of "Bullish" must NOT be stopped
+    # (stop resets at boundary)
+    assert not result.loc[result.index[30], "stopped"]
+
+
+def test_trailing_stop_does_not_fire_on_small_drawdown():
+    """A 1 % drawdown should never fire a 15 % trailing stop."""
+    idx    = pd.date_range("2026-01-01", periods=20, freq="1h", tz="UTC")
+    lr     = pd.Series([-0.001] * 20, index=idx)   # −0.1 % per hour
+    labels = pd.Series(["Bullish"] * 20, index=idx)
+    result = RegimeStrategy().apply(lr, labels, trailing_stop_pct=15)
+    assert not result["stopped"].any()
+
+
+def test_trailing_stop_equity_is_non_decreasing_when_stopped():
+    """While stopped (position=0) equity must stay flat."""
+    idx    = pd.date_range("2026-01-01", periods=60, freq="1h", tz="UTC")
+    lr     = pd.Series([-0.05] * 60, index=idx)
+    labels = pd.Series(["Strong Bullish"] * 60, index=idx)
+    result = RegimeStrategy().apply(lr, labels, trailing_stop_pct=15)
+
+    stopped_rows = result[result["stopped"]]
+    if not stopped_rows.empty:
+        # strategy_lr must be 0 while stopped (position=0); use allclose to tolerate -0.0
+        assert np.allclose(stopped_rows["strategy_lr"].values, 0.0, atol=1e-12)
+
+
 # ── engine helpers ────────────────────────────────────────────────────────────
 # Tests for the core logic patterns used in engine.run() without invoking the
 # full pipeline (which requires trained models and Parquet data on disk).

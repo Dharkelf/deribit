@@ -88,9 +88,10 @@ def _improvement_ideas(fold_df: pd.DataFrame, strategy_df: pd.DataFrame) -> list
                 f"→ Short-Positionen deaktivieren und rein Long / Cash testen"
             )
 
-    # Max drawdown exceeds 20 %
+    # Max drawdown exceeds 20 % and no trailing stop configured
     mdd = max_drawdown(strategy_df["equity_strategy"].values)
-    if not np.isnan(mdd) and mdd < -0.20:
+    stop_active = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
+    if not np.isnan(mdd) and mdd < -0.20 and not stop_active:
         ideas.append(
             f"Max Drawdown {mdd:.0%} → Stop-Loss-Regel (z. B. −15 % Trail) "
             f"für Strong Bearish-Phasen implementieren"
@@ -324,6 +325,16 @@ def generate(
             f"| {regime} | ${row['rmse']:.2f} | ${row['mae']:.2f} | {da_str} | {int(row['folds'])} |"
         )
 
+    stop_active   = "stopped" in strategy_df.columns and strategy_df["stopped"].any()
+    n_stopped     = int(strategy_df["stopped"].sum()) if stop_active else 0
+    stop_pct_cfg  = bt_cfg.get("trailing_stop_pct")
+    stop_note     = (
+        f"> Trailing Stop: −{stop_pct_cfg} % vom Peak → "
+        f"{n_stopped:,} Stunden gesperrt ({100 * n_stopped / max(len(strategy_df), 1):.1f} %)."
+        if stop_active else
+        "> Kein Trailing Stop aktiv."
+    )
+
     lines += [
         "",
         "---",
@@ -334,6 +345,7 @@ def generate(
         "> Look-ahead-Bias bei Regime-Labels. Echte Performance wird schlechter sein.",
         "> Positionsmap: Strong Bullish=+1.0, Bullish=+0.5, Neutral=0, Bearish=−0.5, Strong Bearish=−1.0.",
         "> Keine Transaktionskosten modelliert.",
+        stop_note,
         "",
         "| Metrik | Strategie | Buy-and-Hold |",
         "|---|---|---|",

@@ -30,9 +30,10 @@ hmm:
   n_iter: 200                 # max EM iterations per fit
 
 backtest:
-  min_train_days: 30    # minimum training window per fold
-  step_days: 7          # walk-forward step size (weekly)
-  horizon_hours: 24     # forecast horizon per fold
+  min_train_days: 30         # minimum training window per fold
+  step_days: 7               # walk-forward step size (weekly)
+  horizon_hours: 24          # forecast horizon per fold
+  trailing_stop_pct: 15      # trailing stop: close position when equity drops >15 % from peak; null to disable
 
 logging:
   level: INFO

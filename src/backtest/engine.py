@@ -61,6 +61,9 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     min_train_h = int(bt_cfg.get("min_train_days", 30)) * 24
     step_h      = int(bt_cfg.get("step_days",      7))  * 24
     horizon_h   = int(bt_cfg.get("horizon_hours",  24))
+    trailing_stop_pct: float | None = bt_cfg.get("trailing_stop_pct") or None
+    if trailing_stop_pct is not None:
+        trailing_stop_pct = float(trailing_stop_pct)
 
     # ── Data & model ──────────────────────────────────────────────────────────
     best = load_best_features(config)
@@ -98,7 +101,13 @@ def run(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     # ── Option B: Regime strategy ─────────────────────────────────────────────
     sol_lr = np.log(sol_close / sol_close.shift(1)).dropna()
-    strategy_df = RegimeStrategy().apply(sol_lr, label_series)
+    strategy_df = RegimeStrategy().apply(sol_lr, label_series, trailing_stop_pct=trailing_stop_pct)
+    if trailing_stop_pct is not None:
+        n_stopped = int(strategy_df["stopped"].sum())
+        logger.info(
+            "Trailing stop %.0f %%: %d hours stopped out (%.1f %% of all hours)",
+            trailing_stop_pct, n_stopped, 100 * n_stopped / max(len(strategy_df), 1),
+        )
     logger.info(
         "Regime strategy: %d hours  equity_strategy=%.4f  equity_bnh=%.4f",
         len(strategy_df),
