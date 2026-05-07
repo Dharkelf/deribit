@@ -44,7 +44,7 @@ Two-module Python pipeline:
                           data/raw/*.parquet
                                   │
                         ┌─────────▼──────────┐
-                        │  features.py        │  49 optional features
+                        │  features.py        │  44 optional features
                         │  (Strategy pattern) │  + SOL_log_return (forced)
                         └─────────┬──────────┘
                                   │
@@ -306,7 +306,7 @@ observation matrix; all other features are selected by Optuna.
 | MomentumExtractor | `{BTC,ETH,SOL}_momentum` | 3 |
 | BtcLagExtractor | `BTC_log_return_lag_{1,2,3,6,12,18,24}h` | 7 |
 | MarketCloseExtractor | `BTC_at_{XETRA,NYSE,TSE}_close`, `BTC_return_since_*` | 6 |
-| MaxPainExtractor | `max_pain_{diff_usd,diff_pct,7d_diff_usd,7d_diff_pct}` | 4 |
+| MaxPainExtractor | `max_pain_{ratio,diff_pct,7d_ratio,7d_diff_pct}` | 4 |
 | DisasterExtractor | `FEMA_score` | 1 |
 | MilitaryExtractor | `GDELT_military_score` | 1 |
 | CryptoFearGreedExtractor | `crypto_fear_greed` | 1 |
@@ -351,6 +351,8 @@ git add requirements.txt
   last trading-day close until Monday. Acceptable for a slow-moving regime feature.
 - **BTC Options Max Pain** requires ≥200 rows before XGB+ can use it as a candidate feature.
   Accumulates with each daily `collect` run; expected to qualify around day 9.
+- **XGB+ feature deduplication** — features already in the HMM subset are excluded from the
+  NP+ regressor list to prevent NeuralProphet "Name already used" errors.
 - **GDELT** rate-limits on almost every first attempt; the client retries 3× with 65s delay
   (~3 min worst case). Data is skipped (not zeroed) on persistent failure.
 - **Stock Fear & Greed** (CNN) covers ~255 trading days; older history is unavailable.
