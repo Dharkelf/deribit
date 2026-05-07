@@ -26,8 +26,8 @@ Pipeline
 4. Walk-forward backtest (per sampled day D)
    NP trained on data ≤ 23:00 UTC day D (strict cutoff)
    sell_hour = argmin(CI_width) for h ∈ {15,16,17,18} UTC  ← no leakage
-   Stop-loss: hourly SOL price check from 00:00 D+1; −10 % from entry → exit
-   Gate: NP predicted_move > 1 % AND direction = Long
+   Direction switch: BTC_momentum > 0 → Long (Call), else → Short (Put)
+   Stop-loss: Long exits if price −10 % from entry; Short exits if price +10 %
 
 5. Strategy comparison + PROPHET_DAY_REPORT.md
 """
@@ -51,7 +51,6 @@ _DESIGN_END = pd.Timestamp("2023-12-31 23:00:00", tz="UTC")
 _BT_START = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
 _SELL_HOURS = [15, 16, 17, 18]
 _STOP_LOSS = 0.10
-_MIN_MOVE_PCT = 0.01
 _BUDGET_SEC = 3600.0
 _OVERHEAD = 0.85
 _N_CAL = 2
@@ -360,8 +359,12 @@ def apply_stop_loss(
     entry_ts: pd.Timestamp,
     sell_ts: pd.Timestamp,
     stop_pct: float = _STOP_LOSS,
+    direction: str = "Long",
 ) -> tuple[pd.Timestamp, float, bool, int | None]:
-    """Walk hourly prices entry+1h … sell_ts; exit if price drops > stop_pct.
+    """Walk hourly prices entry+1h … sell_ts; exit when stop is breached.
+
+    Long:  exits if price falls  > stop_pct from entry (price/entry − 1 < −stop_pct)
+    Short: exits if price rises  > stop_pct from entry (price/entry − 1 >  stop_pct)
 
     Returns (exit_ts, exit_price, was_stopped, stop_hour_utc).
     Real-time execution semantics — not leakage.
@@ -379,7 +382,11 @@ def apply_stop_loss(
         price = sol_dict.get(ts, np.nan)
         if np.isnan(price) or price <= 0:
             continue
-        if price / entry_price - 1.0 < -stop_pct:
+        ratio = price / entry_price - 1.0
+        triggered = (direction == "Long" and ratio < -stop_pct) or (
+            direction == "Short" and ratio > stop_pct
+        )
+        if triggered:
             return ts, float(price), True, int(ts.hour)
 
     exit_price = sol_dict.get(sell_ts, np.nan)
@@ -398,7 +405,6 @@ def backtest_prophet_days(
     label_series: pd.Series,
     sell_hours: list[int] = _SELL_HOURS,
     stop_loss_pct: float = _STOP_LOSS,
-    min_move_pct: float = _MIN_MOVE_PCT,
 ) -> pd.DataFrame:
     """Walk-forward NP backtest; returns one row per fold."""
     sol = df_common["SOL_close"]
@@ -451,10 +457,21 @@ def backtest_prophet_days(
             if sol_last > 0 and not np.isnan(predicted_price)
             else np.nan
         )
-        gated_in = not np.isnan(np_move_pct) and np_move_pct > min_move_pct
+
+        feat_snap = feat_df.loc[cutoff_ts] if cutoff_ts in feat_df.index else None
+
+        def _fv(col: str) -> float:
+            return (
+                float(feat_snap[col])
+                if feat_snap is not None and col in feat_df.columns
+                else np.nan
+            )
+
+        btc_mom = _fv("BTC_momentum")
+        direction = "Long" if (not np.isnan(btc_mom) and btc_mom > 0.0) else "Short"
 
         exit_ts, exit_price, was_stopped, stop_hour = apply_stop_loss(
-            sol_dict, cutoff_ts, sell_ts, stop_loss_pct
+            sol_dict, cutoff_ts, sell_ts, stop_loss_pct, direction
         )
 
         sell_price_bnh = sol_dict.get(sell_ts, np.nan)
@@ -468,15 +485,12 @@ def backtest_prophet_days(
             if sol_last > 0 and not np.isnan(exit_price) and exit_price > 0
             else np.nan
         )
-
-        feat_snap = feat_df.loc[cutoff_ts] if cutoff_ts in feat_df.index else None
-
-        def _fv(col: str) -> float:
-            return (
-                float(feat_snap[col])
-                if feat_snap is not None and col in feat_df.columns
-                else np.nan
-            )
+        # Directional P&L: Long profit = price up, Short profit = price down
+        trade_return = (
+            (actual_return if direction == "Long" else -actual_return)
+            if not np.isnan(actual_return)
+            else np.nan
+        )
 
         records.append(
             {
@@ -485,6 +499,7 @@ def backtest_prophet_days(
                 "year": int(cutoff_ts.year),
                 "weekday": cutoff_ts.day_name(),
                 "regime": str(label_series.get(cutoff_ts, "Neutral")),
+                "direction": direction,
                 "sell_hour": int(sell_hour),
                 "sell_ts": sell_ts,
                 "ci_width_pct": float(ci_width_pct),
@@ -492,10 +507,12 @@ def backtest_prophet_days(
                 "np_move_pct": float(np_move_pct)
                 if not np.isnan(np_move_pct)
                 else np.nan,
-                "gated_in": bool(gated_in),
                 "exit_ts": exit_ts,
                 "exit_price": float(exit_price),
                 "actual_return": float(actual_return),
+                "trade_return": float(trade_return)
+                if not np.isnan(trade_return)
+                else np.nan,
                 "bnh_return": float(bnh_return),
                 "was_stopped": bool(was_stopped),
                 "stop_hour": int(stop_hour) if stop_hour is not None else None,
@@ -546,12 +563,11 @@ def _strategy_metrics(df: pd.DataFrame, ret_col: str, label: str) -> dict[str, A
 
 
 def compare_strategies(results: pd.DataFrame) -> pd.DataFrame:
-    """Four strategies compared overall and per year."""
-    gated = results[results["gated_in"]]
+    """Three strategies: directional, long-only, and per-fold B&H."""
     rows = [
-        _strategy_metrics(gated, "actual_return", "NP-Gated + Stop-Loss"),
-        _strategy_metrics(gated, "bnh_return", "NP-Gated (no stop)"),
-        _strategy_metrics(results, "bnh_return", "All candidates (no gate)"),
+        _strategy_metrics(results, "trade_return", "Directional (BTC_mom switch) + Stop-Loss"),
+        _strategy_metrics(results, "actual_return", "Long-only + Stop-Loss"),
+        _strategy_metrics(results, "bnh_return", "Per-fold Buy & Hold (Long, no stop)"),
     ]
     return pd.DataFrame(rows).set_index("strategy")
 
@@ -563,6 +579,7 @@ def _write_report(
     sell_hour_baseline: pd.Series,
     n_candidates: int,
     out_dir: "Path",  # noqa: F821
+    sol_annual_bnh: dict[int, float] | None = None,
 ) -> None:
     from datetime import datetime, timezone
 
@@ -621,7 +638,6 @@ def _write_report(
     lines += [
         "",
         f"- Stop-loss triggered: {results['was_stopped'].sum()} / {len(results)} folds",
-        f"- Gated-in trades: {results['gated_in'].sum()} / {len(results)} folds",
         "",
         "## 3. Strategy Comparison",
         "",
@@ -637,36 +653,47 @@ def _write_report(
             f"| {row['sharpe']:.2f} |"
         )
 
-    lines += ["", "### Per-Year Breakdown (NP-Gated + Stop-Loss)", ""]
-    gated = results[results["gated_in"]].copy()
-    if not gated.empty:
+    bnh = sol_annual_bnh or {}
+    lines += ["", "### Per-Year Breakdown (Directional Strategy vs Buy-and-Hold)", ""]
+    if not results.empty:
         lines += [
-            "| Year | N | Mean Return | Cum Return | Hit Rate | Stop-Loss % |",
-            "|---|---|---|---|---|---|",
+            "| Year | N | Long (N / Win%) | Short (N / Win%) | Trade Cum Return | B&H Return | Stop-Loss % |",
+            "|---|---|---|---|---|---|---|",
         ]
-        for year, grp in gated.groupby("year"):
-            r = grp["actual_return"].dropna()
-            hit = float((r > 0).mean()) if len(r) else np.nan
+        for year, grp in results.groupby("year"):
+            long_grp = grp[grp["direction"] == "Long"]
+            short_grp = grp[grp["direction"] == "Short"]
+            r_long = long_grp["trade_return"].dropna()
+            r_short = short_grp["trade_return"].dropna()
+            r_all = grp["trade_return"].dropna()
+            n_l, n_s = len(long_grp), len(short_grp)
+            win_l = int((r_long > 0).sum())
+            win_s = int((r_short > 0).sum())
             stop_pct = float(grp["was_stopped"].mean()) * 100
-            cum = float(np.exp(r.sum()) - 1.0) if len(r) else np.nan
+            cum = float(np.exp(r_all.sum()) - 1.0) if len(r_all) else np.nan
+            bnh_val = bnh.get(int(year), float("nan"))
+            bnh_str = f"{bnh_val:.2%}" if not np.isnan(bnh_val) else "n/a"
             lines.append(
-                f"| {year} | {len(r)} | {r.mean():.4f} | {cum:.2%} | {hit:.1%} | {stop_pct:.1f}% |"
+                f"| {year} | {len(grp)} "
+                f"| {n_l} / {win_l/max(n_l,1):.0%} "
+                f"| {n_s} / {win_s/max(n_s,1):.0%} "
+                f"| {cum:.2%} | {bnh_str} | {stop_pct:.1f}% |"
             )
 
     lines += [
         "",
         "## 4. Per-Fold Detail (first 30 rows)",
         "",
-        "| Date | Regime | Sell h | CI% | NP Move% | Gated | Return | Stopped |",
+        "| Date | Regime | Dir | Sell h | CI% | NP Move% | Trade Return | Stopped |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for _, row in results.head(30).iterrows():
         lines.append(
-            f"| {row['date']} | {row['regime']} | {row['sell_hour']}:00"
+            f"| {row['date']} | {row['regime']} | {row['direction']}"
+            f" | {row['sell_hour']}:00"
             f" | {row['ci_width_pct']:.1%}"
             f" | {row['np_move_pct']:.1%}"
-            f" | {'✓' if row['gated_in'] else '✗'}"
-            f" | {row['actual_return']:.3f}"
+            f" | {row['trade_return']:.3f}"
             f" | {'✓' if row['was_stopped'] else '✗'} |"
         )
 
@@ -772,7 +799,17 @@ def run(config: dict) -> None:
     comparison = compare_strategies(results)
     logger.info("\n%s", comparison.to_string())
 
+    # Annual SOL buy-and-hold: first → last available price within each backtest year
+    sol_annual_bnh: dict[int, float] = {}
+    for yr in results["year"].unique():
+        yr_sol = sol[(sol.index.year == yr) & (sol.index >= _BT_START)].dropna()
+        if len(yr_sol) >= 2:
+            sol_annual_bnh[int(yr)] = float(
+                np.log(yr_sol.iloc[-1] / yr_sol.iloc[0])
+            )
+
     _write_report(
-        results, comparison, decay_df, sell_hour_base, len(candidates), out_dir
+        results, comparison, decay_df, sell_hour_base, len(candidates), out_dir,
+        sol_annual_bnh=sol_annual_bnh,
     )
     logger.info("=== Prophet Day Backtest complete ===")

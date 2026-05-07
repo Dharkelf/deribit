@@ -143,6 +143,46 @@ def test_apply_stop_loss_exactly_at_threshold_not_triggered():
     assert not was_stopped  # 90/100 - 1 = -0.10, which is NOT < -0.10
 
 
+def test_apply_stop_loss_short_triggered():
+    entry = pd.Timestamp("2024-05-01 23:00", tz="UTC")
+    sell = entry + pd.Timedelta(hours=19)
+    # Price rises above 10 % at hour 6 → Short stop triggered
+    prices = [100.0] + [100.0] * 5 + [112.0] + [100.0] * 13
+    sol_dict = _make_sol_dict(entry, prices)
+    exit_ts, exit_price, was_stopped, stop_hour = apply_stop_loss(
+        sol_dict, entry, sell, stop_pct=0.10, direction="Short"
+    )
+    assert was_stopped
+    assert exit_price == pytest.approx(112.0)
+    assert stop_hour == (entry + pd.Timedelta(hours=6)).hour
+
+
+def test_apply_stop_loss_short_not_triggered():
+    entry = pd.Timestamp("2024-05-01 23:00", tz="UTC")
+    sell = entry + pd.Timedelta(hours=19)
+    # Price only rises 5 % — never breaches 10 % → no stop
+    prices = [100.0] + [105.0] * 18 + [95.0]
+    sol_dict = _make_sol_dict(entry, prices)
+    exit_ts, exit_price, was_stopped, stop_hour = apply_stop_loss(
+        sol_dict, entry, sell, stop_pct=0.10, direction="Short"
+    )
+    assert not was_stopped
+    assert exit_ts == sell
+    assert stop_hour is None
+
+
+def test_apply_stop_loss_long_ignores_price_rise():
+    entry = pd.Timestamp("2024-06-01 23:00", tz="UTC")
+    sell = entry + pd.Timedelta(hours=5)
+    # Price rises → Long stop should NOT trigger
+    prices = [100.0, 120.0, 130.0, 140.0, 150.0, 160.0]
+    sol_dict = _make_sol_dict(entry, prices)
+    _, _, was_stopped, _ = apply_stop_loss(
+        sol_dict, entry, sell, stop_pct=0.10, direction="Long"
+    )
+    assert not was_stopped
+
+
 # ── sample_days ───────────────────────────────────────────────────────────────
 
 
