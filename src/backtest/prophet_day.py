@@ -706,10 +706,17 @@ def run(config: dict) -> None:
 
     logger.info("Loading full dataset …")
     df_common = load_common_dataframe(config)
-    feat_df = build_feature_matrix(df_common.copy(), feature_subset)
 
-    raw_labels = hmm_model.predict(feat_df.values)
-    label_series = _get_semantic_labels(hmm_model, feat_df, raw_labels)
+    # HMM prediction requires exactly the training feature columns
+    X_hmm = build_feature_matrix(df_common.copy(), feature_subset)
+    raw_labels = hmm_model.predict(X_hmm.values)
+    label_series = _get_semantic_labels(hmm_model, X_hmm, raw_labels)
+
+    # Extended feature matrix: HMM subset + features needed for candidate
+    # selection and fold snapshots that may not be in the HMM subset
+    _SELECTION_FEATURES = ["SOL_vol_168h", "BTC_momentum", "VIX_zscore"]
+    extended = list(dict.fromkeys(feature_subset + _SELECTION_FEATURES))
+    feat_df = build_feature_matrix(df_common.copy(), extended)
 
     sol = df_common["SOL_close"]
     if sol.index.tz is None:
