@@ -99,6 +99,7 @@ class GaussianHMMModel(HMMStrategy):
         return self._model.predict(X)  # type: ignore[no-any-return]
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """Return posterior state probabilities, shape (n_samples, n_components)."""
         return self._model.predict_proba(X)  # type: ignore[no-any-return]
 
     def score(self, X: np.ndarray) -> float:

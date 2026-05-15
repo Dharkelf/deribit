@@ -130,6 +130,9 @@ def _init_state(X_df: pd.DataFrame) -> dict[str, Any]:
         if "BTC_log_return" in X_df.columns
         else np.zeros(len(X_df))
     )
+    # sol_buffer is seeded with the last 168 real SOL log-returns so that
+    # SOL_vol_24h / SOL_vol_168h at step 0 reflect actual recent volatility,
+    # not a cold-start zero buffer.
     return {
         "sol_buffer": list(sol_lr[-_LONG_WINDOW:]),
         "btc_history": btc_lr,
@@ -155,11 +158,13 @@ def _update_row(
     if "SOL_vol_168h" in feature_cols:
         row["SOL_vol_168h"] = float(np.std(state["sol_buffer"]))
 
-    # BTC lag features: shift known history forward; zero-pad future BTC steps.
+    # BTC lag features: shift known history forward; persist last known value
+    # for future BTC steps (forward-fill) rather than zero-padding, which
+    # would create a discontinuous feature jump at the history boundary.
     # At forecast step `step`, we need features FOR time t + step + 1.
     # BTC_lag_X at time t+step+1 = BTC_lr[t + step + 1 - X].
     # Index into btc_history (length n): n - X + step.
-    # If index < n: in known history. If index >= n: future BTC → use 0.
+    # If index < n: in known history. If index >= n: future BTC → persist last.
     btc_hist = state["btc_history"]
     n_hist   = len(btc_hist)
     for lag in (1, 2, 3, 6, 12, 18, 24):
@@ -167,7 +172,10 @@ def _update_row(
         if feat not in feature_cols:
             continue
         hist_idx = n_hist - lag + step
-        row[feat] = float(btc_hist[hist_idx]) if 0 <= hist_idx < n_hist else 0.0
+        if 0 <= hist_idx < n_hist:
+            row[feat] = float(btc_hist[hist_idx])
+        else:
+            row[feat] = float(btc_hist[-1])
 
     return row
 
@@ -222,6 +230,8 @@ def _adj_r2(y_true: np.ndarray, y_pred: np.ndarray, n_features: int) -> float:
     n = len(y_true)
     ss_res = float(np.sum((y_true - y_pred) ** 2))
     ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
+    # Guard: n <= n_features + 1 makes denominator (n - n_features - 1) ≤ 0,
+    # which would produce a nonsensical negative infinity result.
     if ss_tot < 1e-12 or n <= n_features + 1:
         return 0.0
     r2 = 1.0 - ss_res / ss_tot
@@ -342,6 +352,9 @@ def _find_plus_features(
     # Dominance check: HMM-base feature importances must dominate the added ones.
     # Prune lowest-importance added features until dominance holds.
     check_subset = list(base_subset) + selected
+    assert len(set(check_subset)) == len(check_subset), (
+        f"Duplicate features in XGB+ subset: {check_subset}"
+    )
     try:
         X_chk = build_feature_matrix(df_common.copy(), check_subset)
     except ValueError:

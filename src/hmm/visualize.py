@@ -444,6 +444,41 @@ def _draw_two_week_panel(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Prophet table overlay
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _add_prophet_forecast_table(
+    ax: plt.Axes,
+    future_ts: pd.DatetimeIndex,
+    np_exp: np.ndarray,
+) -> None:
+    """Overlay a semi-transparent 24h NeuralProphet forecast table on ax."""
+    n = min(24, len(future_ts), len(np_exp))
+    rows = [[future_ts[i].strftime("%H:00"), f"${np_exp[i]:.2f}"] for i in range(n)]
+
+    tbl = ax.table(
+        cellText=rows,
+        colLabels=["UTC", "NP Forecast"],
+        bbox=[0.37, 0.01, 0.26, 0.98],
+        cellLoc="center",
+        zorder=10,
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7)
+
+    for (row, col), cell in tbl.get_celld().items():
+        if row == 0:
+            cell.set_facecolor((1.0, 1.0, 1.0, 0.65))
+            cell.set_text_props(color="#111111", fontweight="bold")
+        else:
+            cell.set_facecolor((1.0, 1.0, 1.0, 0.50))
+            cell.set_text_props(color="#111111")
+        cell.set_edgecolor("#aaaaaa")
+        cell.set_linewidth(0.3)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -465,13 +500,14 @@ def run(config: dict) -> None:
     if model_path.exists():
         model = GaussianHMMModel.load(model_path)
     else:
-        df_common = load_common_dataframe(config)
+        df_common = load_common_dataframe(config, force_reload=True)
         X_df = build_feature_matrix(df_common.copy(), subset)
         model = build_model(config, n_components=n_k)
         model.fit(X_df.values)
         model.save(model_path)
 
-    df_common = load_common_dataframe(config)
+    # force_reload=True: collect just ran, cache may be stale
+    df_common = load_common_dataframe(config, force_reload=True)
     X_df = build_feature_matrix(df_common.copy(), subset)
     sol_close = df_common["SOL_close"].reindex(X_df.index)
 
@@ -542,7 +578,7 @@ def run(config: dict) -> None:
     # ── NeuralProphet pipeline ────────────────────────────────────────────────
     from src.hmm.predict_prophet import run as run_np
 
-    np_results = run_np(config)
+    np_results = run_np(config, xgb_ref=xgb_results.get("xgb_exp"))
 
     # ── Build figure (3 panels) ───────────────────────────────────────────────
     fig, (ax1, ax2, ax3) = plt.subplots(
@@ -658,6 +694,7 @@ def run(config: dict) -> None:
         in_data_adj_r2=xgb_results.get("in_data_adj_r2"),
         plus_adj_r2=xgb_results.get("xgb_plus_adj_r2"),
     )
+    _add_prophet_forecast_table(ax2, np_results["future_ts"], np_results["np_exp"])
     ax2.set_title(
         f"XGBoost recursive forecast  |  E[+24h]: ${xgb_results['xgb_exp'][-1]:.2f}"
         + (
@@ -711,6 +748,7 @@ def run(config: dict) -> None:
     logger.info("Plot saved → %s", out_path)
 
     plt.show()
+    plt.close(fig)
 
 
 def main() -> None:

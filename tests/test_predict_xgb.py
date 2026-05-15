@@ -125,14 +125,15 @@ def test_update_row_btc_lag_history_used() -> None:
     assert new_row["BTC_log_return_lag_6h"] == pytest.approx(expected)
 
 
-def test_update_row_btc_lag_zero_for_future() -> None:
+def test_update_row_btc_lag_persists_last_for_future() -> None:
     X_df, _ = _make_X_df(300)
     state = _init_state(X_df)
     feature_cols = list(X_df.columns)
     row = X_df.iloc[-1].to_dict()
-    # step=10, lag=6: hist_idx = n - 6 + 10 = n + 4 ≥ n → future, use 0
+    # step=10, lag=6: hist_idx = n - 6 + 10 = n + 4 ≥ n → future → forward-fill last known
     new_row = _update_row(row, 0.0, state, step=10, feature_cols=feature_cols)
-    assert new_row["BTC_log_return_lag_6h"] == pytest.approx(0.0)
+    expected = float(state["btc_history"][-1])
+    assert new_row["BTC_log_return_lag_6h"] == pytest.approx(expected)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

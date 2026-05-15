@@ -15,7 +15,8 @@ Option A — XGB Walk-Forward Forecast Accuracy:
 
 Option B — HMM Regime Strategy:
   Uses the pre-trained HMM model to assign regime labels to the full history.
-  Mild look-ahead bias (model trained on all data) — documented in report.
+  Mild look-ahead bias (model parameters trained on all data) — documented in report.
+  Per-fold regime labels for Option A metadata use causal inference (data up to fold cutoff).
   Position map: Strong Bullish=+1 … Strong Bearish=−1.
   Hourly P&L = position × actual SOL log-return.
 
@@ -111,6 +112,8 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     logger.info("HMM model loaded ← %s", mpath)
 
     # ── HMM regime labels — full history (Option B) ───────────────────────────
+    # NOTE: mild look-ahead bias here — model parameters were fitted on all data.
+    # Option B strategy uses these full-history labels for position assignment.
     labels = model.predict(X_hmm.values)
     regime_info = _assign_regime_colors_and_labels(model, X_hmm, labels)
     label_series = pd.Series(
@@ -118,6 +121,18 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         index=X_hmm.index,
         name="regime",
     )
+    logger.warning(
+        "Option B uses full-history HMM labels (mild look-ahead bias — "
+        "model parameters trained on all data). Option A folds use causal labels."
+    )
+
+    # ── Causal regime labels for Option A fold metadata ───────────────────────
+    # For each fold cutoff t, predict regime using only data up to t.
+    # Avoids forward-backward look-ahead in per-fold accuracy reporting.
+    # fold_idxs is a range() with step_h > 0, so t values are always distinct;
+    # the cache guard `if t not in causal_label_at` is a safety net for
+    # hypothetical step_h=0 configs, not a real collision risk.
+    causal_label_at: dict[int, str] = {}
 
     # ── Option B prep ─────────────────────────────────────────────────────────
     sol_lr = np.log(sol_close / sol_close.shift(1)).dropna()
@@ -160,6 +175,11 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     fold_records: list[dict] = []
 
     for fold_i, t in enumerate(fold_idxs):
+        # Causal regime label: Viterbi on data up to fold cutoff only
+        if t not in causal_label_at:
+            causal_labels_t = model.predict(X_hmm.values[:t + 1])
+            causal_label_at[t] = regime_info[int(causal_labels_t[-1])]["label"]
+
         X_train = X_df.iloc[:t]
         s_train = sol_close.iloc[:t]
         X_tr, y_tr = _build_train_data(X_train, s_train)
@@ -176,9 +196,7 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         pred_prices = start_p * np.exp(np.cumsum(pred_lrs))
 
         ts_at_t = X_df.index[t]
-        regime_at_t = label_series.get(
-            ts_at_t, label_series.iloc[min(t, len(label_series) - 1)]
-        )
+        regime_at_t = causal_label_at[t]
 
         # ── Option C signals (collected per fold, free — model already trained) ──
         if needs_gate:

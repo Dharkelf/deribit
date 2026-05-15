@@ -356,6 +356,10 @@ git add requirements.txt
 - **GDELT** rate-limits on almost every first attempt; the client retries 3× with 65s delay
   (~3 min worst case). Data is skipped (not zeroed) on persistent failure.
 - **Stock Fear & Greed** (CNN) covers ~255 trading days; older history is unavailable.
+  Because the HMM training set spans several years, `stock_fear_greed` causes ~75 % of
+  rows to be dropped when included as a feature (NaN rows are excluded by
+  `build_feature_matrix()`).  The HMM optimiser therefore rarely selects it, and XGB+
+  skips it unless row-count remains above `min_rows=200` after the drop.
 - **MarketCloseExtractor** requires `pandas-market-calendars`. If unavailable, 6 BTC-at-close
   features are silently excluded (logged as WARNING).
 - **XGBoost+ adj-R²** is negative on the 72 h in-data evaluation window. This is expected:

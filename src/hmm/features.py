@@ -29,6 +29,9 @@ Available feature groups
   CryptoFearGreedExtractor   — Crypto Fear & Greed Index [0, 1]
   StockFearGreedExtractor    — Stock Fear & Greed Index CNN [0, 1]
   FedRateExtractor           — Fed Funds Rate (%) + signed last FOMC change
+  FundingRateExtractor       — SOL perpetual 8h funding rate + 24h EMA
+  OIRatioExtractor           — SOL/BTC open interest notional ratio
+  IVSkewExtractor            — BTC options ATM put/call IV skew
 """
 
 import logging
@@ -42,6 +45,11 @@ from src.utils.paths import raw_dir
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Process-level cache so repeated calls within one pipeline run skip re-reads
+# ─────────────────────────────────────────────────────────────────────────────
+_df_common_cache: dict[str, pd.DataFrame] = {}
+
 _SYMBOLS       = ["BTC", "ETH", "SOL", "VIX"]
 _PRICE_SYMBOLS = ["BTC", "ETH", "SOL"]   # 24/7 crypto — inner-joined
 _SHORT_WINDOW = 24    # 1 day in hours
@@ -52,7 +60,7 @@ _LONG_WINDOW = 168    # 1 week in hours
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def load_common_dataframe(config: dict) -> pd.DataFrame:
+def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFrame:
     """Load all Parquet files and produce a complete 24-hour UTC hourly DataFrame.
 
     Steps:
@@ -64,8 +72,14 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
 
     Raises FileNotFoundError if a core symbol file (BTC/ETH/SOL/VIX) is missing.
     FEMA and GDELT are optional — missing files produce a zero-filled column.
+
+    Results are cached per raw_dir within the same process. Pass force_reload=True
+    after a collect phase to invalidate the cache.
     """
     rd = raw_dir(config)
+    cache_key = str(rd)
+    if not force_reload and cache_key in _df_common_cache:
+        return _df_common_cache[cache_key].copy()
 
     # --- 24/7 crypto symbols — inner-join to set the authoritative time range ---
     frames: list[pd.DataFrame] = []
@@ -160,7 +174,44 @@ def load_common_dataframe(config: dict) -> pd.DataFrame:
             s = pd.Series(np.nan, index=full_index, name=col)
         combined[col] = s
 
+    def _read_optional_col(
+        path: Path, col: str, fallback_msg: str
+    ) -> pd.Series:
+        """Read a single column from a Parquet file with schema validation."""
+        if not path.exists():
+            logger.warning("%s not found — filling %s with NaN", path.name, col)
+            return pd.Series(np.nan, index=full_index, name=col)
+        try:
+            df_tmp = pd.read_parquet(path, engine="pyarrow")
+            if col not in df_tmp.columns:
+                logger.warning(
+                    "%s missing column '%s' (got: %s) — filling with NaN",
+                    path.name, col, list(df_tmp.columns),
+                )
+                return pd.Series(np.nan, index=full_index, name=col)
+            return df_tmp[col]
+        except Exception as exc:
+            logger.warning("Failed reading %s: %s — filling %s with NaN", path.name, exc, col)
+            return pd.Series(np.nan, index=full_index, name=col)
+
+    # Funding rate: 0 is economically wrong (neutral market has ~0 funding, but NaN
+    # is safer than 0 which implies zero crowding — use NaN to let dropna exclude stale).
+    combined["funding_rate_8h"] = _read_optional_col(
+        rd / "FUNDING_RATE_SOL.parquet", "funding_rate_8h", "FUNDING_RATE_SOL"
+    ).reindex(full_index).ffill()
+
+    # OI ratio: NaN when not yet collected (only 1 daily snapshot; accumulates over time)
+    combined["SOL_OI_BTC_ratio"] = _read_optional_col(
+        rd / "OI_RATIO.parquet", "SOL_OI_BTC_ratio", "OI_RATIO"
+    ).reindex(full_index).ffill()
+
+    # IV skew: NaN when not yet collected
+    combined["btc_iv_skew"] = _read_optional_col(
+        rd / "BTC_IV_SKEW.parquet", "btc_iv_skew", "BTC_IV_SKEW"
+    ).reindex(full_index).ffill()
+
     combined.index.name = "timestamp"
+    _df_common_cache[cache_key] = combined
     logger.info(
         "Common DataFrame: %d rows × %d cols | %s → %s",
         len(combined),
@@ -340,7 +391,7 @@ class MarketCloseExtractor(FeatureExtractor):
         try:
             import pandas_market_calendars as mcal  # noqa: PLC0415
         except ImportError:
-            logger.warning(
+            logger.debug(
                 "pandas-market-calendars not installed — "
                 "MarketCloseExtractor skipped. "
                 "Install with: pip install pandas-market-calendars"
@@ -533,6 +584,67 @@ class FedRateExtractor(FeatureExtractor):
         return df
 
 
+class FundingRateExtractor(FeatureExtractor):
+    """SOL perpetual 8h funding rate — hourly, forward-filled from 8h snapshots.
+
+    funding_rate_8h     — raw 8h rate (decimal, e.g. 0.0001 = 0.01 % per 8h)
+    funding_rate_ema24h — 24h EMA of the 8h rate; smooths intraday noise
+
+    Positive funding: longs pay shorts → crowded long → bearish reversal risk.
+    Negative funding: shorts pay longs → crowded short → squeeze risk.
+    Already forward-filled in load_common_dataframe. NaN before SOL listing.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["funding_rate_8h", "funding_rate_ema24h"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "funding_rate_8h" not in df.columns:
+            df["funding_rate_8h"] = np.nan
+        df["funding_rate_ema24h"] = (
+            df["funding_rate_8h"].ewm(span=_SHORT_WINDOW, adjust=False).mean()
+        )
+        return df
+
+
+class OIRatioExtractor(FeatureExtractor):
+    """SOL/BTC open interest ratio — daily snapshot, forward-filled to hourly.
+
+    SOL_OI_BTC_ratio — SOL perpetual notional OI (USD) / BTC perpetual notional OI (USD).
+    High ratio → elevated SOL leverage relative to BTC → risk-on / potential squeeze.
+    NaN when not yet collected. Forward-filled in load_common_dataframe.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["SOL_OI_BTC_ratio"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "SOL_OI_BTC_ratio" not in df.columns:
+            df["SOL_OI_BTC_ratio"] = np.nan
+        return df
+
+
+class IVSkewExtractor(FeatureExtractor):
+    """BTC options IV skew — daily snapshot, forward-filled to hourly.
+
+    btc_iv_skew — mean(ATM put IV) − mean(ATM call IV) for near-term BTC options.
+    Positive: crash protection premium → bearish sentiment (fear).
+    Negative: call IV elevated → bullish positioning (greed).
+    NaN when not yet collected. Forward-filled in load_common_dataframe.
+    """
+
+    @property
+    def feature_names(self) -> list[str]:
+        return ["btc_iv_skew"]
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "btc_iv_skew" not in df.columns:
+            df["btc_iv_skew"] = np.nan
+        return df
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry and builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,6 +663,9 @@ ALL_EXTRACTORS: list[FeatureExtractor] = [
     CryptoFearGreedExtractor(),
     StockFearGreedExtractor(),
     FedRateExtractor(),
+    FundingRateExtractor(),
+    OIRatioExtractor(),
+    IVSkewExtractor(),
 ]
 
 ALL_FEATURE_NAMES: list[str] = [
@@ -569,6 +684,13 @@ def build_feature_matrix(
     """
     for extractor in ALL_EXTRACTORS:
         df = extractor.transform(df)
+
+    dups = df.columns[df.columns.duplicated()].tolist()
+    if dups:
+        raise ValueError(
+            f"Duplicate columns after feature extraction: {dups}. "
+            "Check ALL_EXTRACTORS for naming conflicts."
+        )
 
     required = ["SOL_log_return"]
     cols = required + [f for f in feature_subset if f not in required]

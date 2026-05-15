@@ -184,6 +184,10 @@ def _apply_discrete_trading(
                 if threshold is not None and (equity / peak) - 1.0 < -threshold:
                     is_stopped_trade = True
 
+        # Advance by the full hold duration, regardless of how many of those
+        # hours were off-hours.  The hold slot counts wall-clock time so that
+        # the next entry point is predictable from calendar, not from realized
+        # active hours.  Off-hours bars are simply flat (zero position).
         i += hold
 
     return adj_pos, stopped, off_hours

@@ -22,7 +22,9 @@ from src.collector.deribit_client import DeribitClient
 from src.collector.fema_client import FemaClient
 from src.collector.fear_greed_client import fetch_crypto_fear_greed, fetch_stock_fear_greed
 from src.collector.fed_client import fetch_fed_rate
+from src.collector.funding_client import DeribitFundingRateClient, DeribitOIClient
 from src.collector.gdelt_client import GdeltClient
+from src.collector.iv_skew_client import DeribitIVSkewClient
 from src.collector.options_client import DeribitOptionsClient
 from src.collector.repository import ParquetRepository
 from src.collector.vix_client import VixClient
@@ -45,6 +47,9 @@ def run(config: dict) -> None:
     _fetch_crypto_fear_greed(repo, history_days)
     _fetch_stock_fear_greed(repo)
     _fetch_fed_rate(repo)
+    _fetch_funding_rate(repo, history_days)
+    _fetch_oi_snapshot(repo)
+    _fetch_iv_skew(config, repo)
 
 
 def _fetch_deribit(
@@ -167,6 +172,48 @@ def _fetch_fed_rate(repo: ParquetRepository) -> None:
     if df is None:
         logger.warning("Fed rate fetch failed — skipping persist")
         return
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_funding_rate(repo: ParquetRepository, history_days: int) -> None:
+    symbol = "FUNDING_RATE_SOL"
+    start, end = _time_range(repo, symbol, history_days)
+    logger.info("Fetching SOL funding rate from %s to %s", start.date(), end.date())
+    with DeribitFundingRateClient(instrument="SOL_USDC-PERPETUAL") as client:
+        df = client.fetch_hourly(start, end)
+    if df.empty:
+        logger.warning("Funding rate fetch returned no data — skipping persist")
+        return
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_oi_snapshot(repo: ParquetRepository) -> None:
+    symbol = "OI_RATIO"
+    last = repo.last_timestamp(symbol)
+    today = datetime.now(tz=timezone.utc).date()
+    if last is not None and last.date() >= today:
+        logger.info("OI ratio already up to date")
+        return
+    logger.info("Fetching SOL/BTC OI snapshot")
+    with DeribitOIClient() as client:
+        df = client.fetch_daily_snapshot()
+    repo.append(symbol, df)
+    repo.save_sample(symbol)
+
+
+def _fetch_iv_skew(config: dict, repo: ParquetRepository) -> None:
+    symbol = "BTC_IV_SKEW"
+    last = repo.last_timestamp(symbol)
+    today = datetime.now(tz=timezone.utc).date()
+    if last is not None and last.date() >= today:
+        logger.info("BTC IV skew already up to date")
+        return
+    days_ahead: int = config.get("iv_skew", {}).get("days_ahead", 14)
+    logger.info("Fetching BTC IV skew (within %d days)", days_ahead)
+    with DeribitIVSkewClient(currency="BTC", days_ahead=days_ahead) as client:
+        df = client.fetch_daily_snapshot()
     repo.append(symbol, df)
     repo.save_sample(symbol)
 

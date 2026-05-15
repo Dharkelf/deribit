@@ -90,5 +90,14 @@ backtest:
       xgb_gated: true
       allowed_hours: [0, 1, 2, 6, 7, 8, 15, 16, 17]
 
+iv_skew:
+  days_ahead: 14              # BTC options expiring within N days for skew computation
+
+neuralprophet:
+  ensemble_seeds: [0, 42, 99, 137, 256]   # Seeds für Ensemble-Training
+  xgb_anchor_hours: 6                      # Erste N Stunden als XGB-Anker für Seed-Gewichtung
+  n_forecasts: 24                           # direkt auf 24h-Horizont spezialisiert (kein 48h-Puffer mehr)
+  hmm_regime_probs: true                    # HMM-State-Wahrscheinlichkeiten als Regressoren
+
 logging:
   level: INFO

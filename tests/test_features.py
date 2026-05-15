@@ -10,11 +10,14 @@ from src.hmm.features import (
     CryptoFearGreedExtractor,
     DisasterExtractor,
     FedRateExtractor,
+    FundingRateExtractor,
+    IVSkewExtractor,
     LogDiffReturnExtractor,
     MarketCloseExtractor,
     MaxPainExtractor,
     MilitaryExtractor,
     MomentumExtractor,
+    OIRatioExtractor,
     RollingCorrelationExtractor,
     RollingVolatilityExtractor,
     StockFearGreedExtractor,
@@ -29,6 +32,9 @@ def _make_common_df(
     with_max_pain: bool = True,
     with_sentiment: bool = True,
     with_fed: bool = True,
+    with_funding: bool = True,
+    with_oi: bool = True,
+    with_iv_skew: bool = True,
 ) -> pd.DataFrame:
     """Minimal common DataFrame with all required symbol + soft-signal columns."""
     index = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
@@ -51,6 +57,12 @@ def _make_common_df(
     if with_fed:
         df["fed_rate"] = 4.33
         df["fed_rate_last_change"] = -0.25
+    if with_funding:
+        df["funding_rate_8h"] = rng.uniform(-0.001, 0.001, n)
+    if with_oi:
+        df["SOL_OI_BTC_ratio"] = rng.uniform(0.01, 0.05, n)
+    if with_iv_skew:
+        df["btc_iv_skew"] = rng.uniform(-5.0, 5.0, n)
     return df
 
 
@@ -341,3 +353,106 @@ def test_new_sentiment_features_in_build_matrix() -> None:
     for col in ("crypto_fear_greed", "stock_fear_greed", "fed_rate", "fed_rate_last_change"):
         assert col in matrix.columns
     assert not matrix.isnull().any().any()
+
+
+# ── FundingRateExtractor ──────────────────────────────────────────────────────
+
+def test_funding_rate_passthrough() -> None:
+    df = _make_common_df()
+    original = df["funding_rate_8h"].copy()
+    df = FundingRateExtractor().transform(df)
+    pd.testing.assert_series_equal(df["funding_rate_8h"], original)
+
+
+def test_funding_rate_ema24h_computed() -> None:
+    df = FundingRateExtractor().transform(_make_common_df())
+    assert "funding_rate_ema24h" in df.columns
+    assert not df["funding_rate_ema24h"].isna().all()
+    # EMA must stay bounded within the range of the raw input
+    lo, hi = df["funding_rate_8h"].min(), df["funding_rate_8h"].max()
+    assert df["funding_rate_ema24h"].dropna().between(lo * 2, hi * 2).all()
+
+
+def test_funding_rate_nan_when_column_missing() -> None:
+    df = _make_common_df(with_funding=False)
+    df = FundingRateExtractor().transform(df)
+    assert "funding_rate_8h" in df.columns
+    assert df["funding_rate_8h"].isna().all()
+    assert "funding_rate_ema24h" in df.columns
+
+
+def test_funding_rate_in_build_matrix() -> None:
+    matrix = build_feature_matrix(_make_common_df(), ["funding_rate_8h", "funding_rate_ema24h"])
+    assert "funding_rate_8h" in matrix.columns
+    assert "funding_rate_ema24h" in matrix.columns
+    assert not matrix.isnull().any().any()
+
+
+# ── OIRatioExtractor ──────────────────────────────────────────────────────────
+
+def test_oi_ratio_passthrough() -> None:
+    df = _make_common_df()
+    original = df["SOL_OI_BTC_ratio"].copy()
+    df = OIRatioExtractor().transform(df)
+    pd.testing.assert_series_equal(df["SOL_OI_BTC_ratio"], original)
+
+
+def test_oi_ratio_nan_when_column_missing() -> None:
+    df = _make_common_df(with_oi=False)
+    df = OIRatioExtractor().transform(df)
+    assert "SOL_OI_BTC_ratio" in df.columns
+    assert df["SOL_OI_BTC_ratio"].isna().all()
+
+
+def test_oi_ratio_in_build_matrix() -> None:
+    matrix = build_feature_matrix(_make_common_df(), ["SOL_OI_BTC_ratio"])
+    assert "SOL_OI_BTC_ratio" in matrix.columns
+    assert not matrix["SOL_OI_BTC_ratio"].isna().any()
+
+
+# ── IVSkewExtractor ───────────────────────────────────────────────────────────
+
+def test_iv_skew_passthrough() -> None:
+    df = _make_common_df()
+    original = df["btc_iv_skew"].copy()
+    df = IVSkewExtractor().transform(df)
+    pd.testing.assert_series_equal(df["btc_iv_skew"], original)
+
+
+def test_iv_skew_nan_when_column_missing() -> None:
+    df = _make_common_df(with_iv_skew=False)
+    df = IVSkewExtractor().transform(df)
+    assert "btc_iv_skew" in df.columns
+    assert df["btc_iv_skew"].isna().all()
+
+
+def test_iv_skew_in_build_matrix() -> None:
+    matrix = build_feature_matrix(_make_common_df(), ["btc_iv_skew"])
+    assert "btc_iv_skew" in matrix.columns
+    assert not matrix["btc_iv_skew"].isna().any()
+
+
+# ── build_feature_matrix duplicate-column guard ───────────────────────────────
+
+def test_build_feature_matrix_raises_on_duplicate_columns() -> None:
+    """build_feature_matrix must raise when the df contains duplicate column names."""
+    from src.hmm.features import FeatureExtractor, build_feature_matrix
+
+    class _DupExtractor(FeatureExtractor):
+        @property
+        def feature_names(self) -> list[str]:
+            return ["extra_dup"]
+
+        def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+            # pd.concat is the only way to inject real duplicate column names
+            extra = pd.DataFrame({"extra_dup": 1.0}, index=df.index)
+            return pd.concat([df, extra, extra], axis=1)
+
+    import src.hmm.features as feat_mod
+    original_extractors = list(feat_mod.ALL_EXTRACTORS)
+    feat_mod.ALL_EXTRACTORS.append(_DupExtractor())
+    try:
+        with pytest.raises(ValueError, match="Duplicate columns"):
+            build_feature_matrix(_make_common_df(), ["extra_dup"])
+    finally:
+        feat_mod.ALL_EXTRACTORS[:] = original_extractors
