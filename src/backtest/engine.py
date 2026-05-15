@@ -175,10 +175,18 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     fold_records: list[dict] = []
 
     for fold_i, t in enumerate(fold_idxs):
-        # Causal regime label: Viterbi on data up to fold cutoff only
+        # Causal regime label: Viterbi on data up to fold cutoff only.
+        # Sliced by timestamp (not by integer index) so that X_hmm and X_df
+        # alignment is preserved even when X_hmm starts later than X_df
+        # (e.g. 168h features add warmup-row offset).
         if t not in causal_label_at:
-            causal_labels_t = model.predict(X_hmm.values[:t + 1])
-            causal_label_at[t] = regime_info[int(causal_labels_t[-1])]["label"]
+            ts_cutoff = X_df.index[t]
+            X_hmm_causal = X_hmm.loc[X_hmm.index <= ts_cutoff]
+            if X_hmm_causal.empty:
+                causal_label_at[t] = "Neutral"
+            else:
+                causal_labels_t = model.predict(X_hmm_causal.values)
+                causal_label_at[t] = regime_info[int(causal_labels_t[-1])]["label"]
 
         X_train = X_df.iloc[:t]
         s_train = sol_close.iloc[:t]
@@ -201,7 +209,16 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         # ── Option C signals (collected per fold, free — model already trained) ──
         if needs_gate:
             xgb_direction_at[ts_at_t] = 1.0 if pred_prices[-1] > start_p else -1.0
-            state_int = int(state_series.get(ts_at_t, state_series.iloc[-1]))  # type: ignore[arg-type]
+            state_int_raw = state_series.get(ts_at_t)
+            if state_int_raw is None:
+                logger.debug(
+                    "ts_at_t %s not in state_series (X_hmm/X_df index gap) — "
+                    "using last known state for persistence",
+                    ts_at_t,
+                )
+                state_int = int(state_series.iloc[-1])
+            else:
+                state_int = int(state_int_raw)
             persistence_at[ts_at_t] = float(trans_24[state_int, state_int])
 
         for h, (pred_p, ts) in enumerate(zip(pred_prices, s_test.index)):
@@ -213,6 +230,7 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
                     "horizon_h": h + 1,
                     "actual": act_p,
                     "xgb_pred": pred_p,
+                    "start_price": start_p,
                     "regime": regime_at_t,
                 }
             )

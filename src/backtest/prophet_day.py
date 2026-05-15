@@ -53,7 +53,7 @@ _SELL_HOURS = [15, 16, 17, 18]
 _STOP_LOSS = 0.10
 _BUDGET_SEC = 3600.0
 _OVERHEAD = 0.85
-_N_CAL = 2
+_N_CAL = 3
 _DECAY_LAGS = [0, 1, 2, 3]
 
 
@@ -157,11 +157,11 @@ def _sell_hour_baseline(
     )
 
 
-def _get_semantic_labels(
+def _build_id_to_label(
     hmm_model: GaussianHMMModel,
     X_df: pd.DataFrame,
-    raw_labels: np.ndarray,
-) -> pd.Series:
+) -> dict[int, str]:
+    """Map HMM integer state → semantic regime label, ordered by SOL_log_return mean."""
     sol_idx = list(X_df.columns).index("SOL_log_return")
     means = hmm_model._model.means_[:, sol_idx]
     k = hmm_model.n_components
@@ -169,25 +169,22 @@ def _get_semantic_labels(
     _LABEL_MAP: dict[int, dict[int, str]] = {
         2: {1: "Bearish", 2: "Bullish"},
         3: {1: "Bearish", 2: "Neutral", 3: "Bullish"},
-        4: {
-            1: "Strong Bearish",
-            2: "Bearish",
-            3: "Bullish",
-            4: "Strong Bullish",
-        },
-        5: {
-            1: "Strong Bearish",
-            2: "Bearish",
-            3: "Neutral",
-            4: "Bullish",
-            5: "Strong Bullish",
-        },
+        4: {1: "Strong Bearish", 2: "Bearish", 3: "Bullish", 4: "Strong Bullish"},
+        5: {1: "Strong Bearish", 2: "Bearish", 3: "Neutral", 4: "Bullish", 5: "Strong Bullish"},
     }
     names = _LABEL_MAP.get(k, {r: f"Regime {r}" for r in range(1, k + 1)})
-    id_to_label = {
+    return {
         int(state): names.get(rank, f"Regime {rank}")
         for rank, state in enumerate(order, start=1)
     }
+
+
+def _get_semantic_labels(
+    hmm_model: GaussianHMMModel,
+    X_df: pd.DataFrame,
+    raw_labels: np.ndarray,
+) -> pd.Series:
+    id_to_label = _build_id_to_label(hmm_model, X_df)
     return pd.Series(
         [id_to_label.get(int(s), "Neutral") for s in raw_labels],
         index=X_df.index,
@@ -234,14 +231,29 @@ def _feature_score(
     feat_df: pd.DataFrame,
     candidates: list[pd.Timestamp],
 ) -> pd.Series:
-    """Composite score from feature quantile ranks (no future data)."""
+    """Composite score normalised against design-period (≤ 2023) statistics.
+
+    rank(pct=True) across candidates includes future rows — instead clip each
+    candidate's value into the [p5, p95] interval of the design period.
+    """
     sub = feat_df.reindex(candidates)
     score = pd.Series(0.0, index=sub.index)
     for col in ("SOL_vol_168h", "VIX_zscore"):
-        if col in sub.columns:
-            score += sub[col].rank(pct=True).fillna(0.5)
+        if col not in sub.columns:
+            continue
+        ref = feat_df.loc[feat_df.index <= _DESIGN_END, col].dropna()
+        r_min, r_max = ref.quantile(0.05), ref.quantile(0.95)
+        if r_max > r_min:
+            score += ((sub[col] - r_min) / (r_max - r_min)).clip(0, 1).fillna(0.5)
+        else:
+            score += 0.5
     if "BTC_momentum" in sub.columns:
-        score += sub["BTC_momentum"].abs().rank(pct=True).fillna(0.5)
+        ref = feat_df.loc[feat_df.index <= _DESIGN_END, "BTC_momentum"].dropna().abs()
+        r_min, r_max = ref.quantile(0.05), ref.quantile(0.95)
+        if r_max > r_min:
+            score += ((sub["BTC_momentum"].abs() - r_min) / (r_max - r_min)).clip(0, 1).fillna(0.5)
+        else:
+            score += 0.5
     return score
 
 
@@ -313,7 +325,7 @@ def calibrate_fold_time(
         logger.warning("All calibration folds failed; using fallback %.0f s", fallback)
         return fallback
 
-    avg = float(np.mean(times))
+    avg = float(np.percentile(times, 75))
     n_budget = int(_BUDGET_SEC * _OVERHEAD / avg)
     logger.info(
         "Calibration: %d folds, avg=%.1f s → budget allows ~%d folds",
@@ -468,7 +480,11 @@ def backtest_prophet_days(
             )
 
         btc_mom = _fv("BTC_momentum")
-        direction = "Long" if (not np.isnan(btc_mom) and btc_mom > 0.0) else "Short"
+        if np.isnan(btc_mom):
+            logger.warning("BTC_momentum NaN at %s — defaulting to Long", cutoff_ts.date())
+            direction = "Long"
+        else:
+            direction = "Long" if btc_mom > 0.0 else "Short"
 
         exit_ts, exit_price, was_stopped, stop_hour = apply_stop_loss(
             sol_dict, cutoff_ts, sell_ts, stop_loss_pct, direction
@@ -767,9 +783,32 @@ def run(config: dict) -> None:
     ].dropna()
     vol_median = float(design_vols.median()) if not design_vols.empty else 0.0
 
+    # ── Causal labels for 2024+ candidate timestamps ─────────────────────────
+    # label_series uses full-history HMM parameters → mild look-ahead for design
+    # period (acceptable) but must be eliminated for candidate selection (2024+).
+    # Recompute Viterbi causally at each 23:00 UTC weekday timestamp in 2024+.
+    id_to_label = _build_id_to_label(hmm_model, X_hmm)
+    causal_label_series = label_series.copy()
+    causal_ts_mask = (
+        (X_hmm.index >= _BT_START)
+        & (X_hmm.index.hour == 23)
+        & (X_hmm.index.dayofweek < 5)
+    )
+    causal_timestamps = X_hmm.index[causal_ts_mask]
+    logger.info(
+        "Computing causal HMM labels for %d candidate timestamps (2024+) …",
+        len(causal_timestamps),
+    )
+    for ts in causal_timestamps:
+        X_causal = X_hmm.loc[X_hmm.index <= ts]
+        if X_causal.empty:
+            continue
+        last_state = int(hmm_model.predict(X_causal.values)[-1])
+        causal_label_series.loc[ts] = id_to_label.get(last_state, "Neutral")
+
     # ── Phase 2: candidates ────────────────────────────────────────────────────
     logger.info("Phase 2: selecting candidates (2024+) …")
-    candidates = select_candidates(feat_df, label_series, vol_median)
+    candidates = select_candidates(feat_df, causal_label_series, vol_median)
     if not candidates:
         logger.error("No candidates found — check data coverage for 2024+")
         return
@@ -781,7 +820,7 @@ def run(config: dict) -> None:
     logger.info("Budget: %d folds", n_folds)
 
     # Exclude calibration folds from sampling to avoid repeated training
-    sampled = sample_days(candidates[_N_CAL:], label_series, feat_df, n_folds)
+    sampled = sample_days(candidates[_N_CAL:], causal_label_series, feat_df, n_folds)
     if not sampled:
         logger.error("No days sampled — not enough candidates after calibration skip")
         return
@@ -789,7 +828,7 @@ def run(config: dict) -> None:
     # ── Phase 4: backtest ─────────────────────────────────────────────────────
     logger.info("Phase 4: NP walk-forward backtest (%d folds) …", len(sampled))
     results = backtest_prophet_days(
-        config, sampled, feature_subset, df_common, feat_df, label_series
+        config, sampled, feature_subset, df_common, feat_df, causal_label_series
     )
     if results.empty:
         logger.error("No fold results — check data and model")

@@ -109,7 +109,8 @@ def _yearly_xgb_stats(fold_df: pd.DataFrame) -> pd.DataFrame:
                 "year": int(year),
                 "rmse": rmse(grp["actual"].values, grp["xgb_pred"].values),
                 "da": directional_accuracy(
-                    grp["actual"].values, grp["xgb_pred"].values
+                    grp["actual"].values, grp["xgb_pred"].values,
+                    starts=grp["start_price"].values,
                 ),
                 "n_folds": int(grp["fold_id"].nunique()),
             }
@@ -132,7 +133,7 @@ def _improvement_ideas(
     for regime, grp in h1.groupby("regime"):
         if len(grp) < 5:
             continue
-        da = directional_accuracy(grp["actual"].values, grp["xgb_pred"].values)
+        da = directional_accuracy(grp["actual"].values, grp["xgb_pred"].values, starts=grp["start_price"].values)
         if not np.isnan(da) and da < 0.50:
             ideas.append(
                 f"XGB Directional Accuracy in '{regime}': {da:.0%} < 50 % "
@@ -209,7 +210,6 @@ def _improvement_ideas(
     # NP reminder
     ideas.append(
         "NeuralProphet vom Walk-Forward ausgeschlossen (~55 s/Fold → ~3 h für 200 Folds). "
-        "NP+ Shape-Bug ist behoben (2026-05-07). "
         "Für separate NP-Evaluation: python main.py hmm (produziert NP-Forecast)."
     )
 
@@ -257,7 +257,7 @@ def generate(
     h1 = fold_df[fold_df["horizon_h"] == 1]
     overall_rmse = rmse(h1["actual"].values, h1["xgb_pred"].values)
     overall_mae = mae(h1["actual"].values, h1["xgb_pred"].values)
-    overall_da = directional_accuracy(h1["actual"].values, h1["xgb_pred"].values)
+    overall_da = directional_accuracy(h1["actual"].values, h1["xgb_pred"].values, starts=h1["start_price"].values)
 
     sp_strat = sharpe(strategy_df["strategy_lr"].values)
     sp_bnh = sharpe(strategy_df["bnh_lr"].values)
@@ -266,7 +266,7 @@ def generate(
     ann_bnh = annualized_return(strategy_df["bnh_lr"].values)
 
     regime_metrics = (
-        h1.groupby("regime")[["fold_id", "actual", "xgb_pred"]]
+        h1.groupby("regime")[["fold_id", "actual", "xgb_pred", "start_price"]]
         .apply(
             lambda g: pd.Series(
                 {
@@ -274,7 +274,8 @@ def generate(
                     "rmse": rmse(g["actual"].values, g["xgb_pred"].values),
                     "mae": mae(g["actual"].values, g["xgb_pred"].values),
                     "dir_acc": directional_accuracy(
-                        g["actual"].values, g["xgb_pred"].values
+                        g["actual"].values, g["xgb_pred"].values,
+                        starts=g["start_price"].values,
                     ),
                 }
             )

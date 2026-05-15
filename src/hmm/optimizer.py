@@ -84,8 +84,12 @@ def load_study(config: dict) -> optuna.Study | None:
     path = models_dir(config) / _STUDY_FILENAME
     if not path.exists():
         return None
-    with open(path, "rb") as f:
-        study: optuna.Study = pickle.load(f)
+    try:
+        with open(path, "rb") as f:
+            study: optuna.Study = pickle.load(f)
+    except Exception as exc:
+        logger.warning("Optuna study corrupt or incompatible (%s) — will re-run", exc)
+        return None
     logger.info("Optuna study loaded ← %s  (%d trials)", path, len(study.trials))
     return study
 

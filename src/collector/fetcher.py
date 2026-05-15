@@ -180,8 +180,12 @@ def _fetch_funding_rate(repo: ParquetRepository, history_days: int) -> None:
     symbol = "FUNDING_RATE_SOL"
     start, end = _time_range(repo, symbol, history_days)
     logger.info("Fetching SOL funding rate from %s to %s", start.date(), end.date())
-    with DeribitFundingRateClient(instrument="SOL_USDC-PERPETUAL") as client:
-        df = client.fetch_hourly(start, end)
+    try:
+        with DeribitFundingRateClient(instrument="SOL_USDC-PERPETUAL") as client:
+            df = client.fetch_hourly(start, end)
+    except Exception as exc:
+        logger.warning("Funding rate fetch failed (%s) — skipping persist", exc)
+        return
     if df.empty:
         logger.warning("Funding rate fetch returned no data — skipping persist")
         return

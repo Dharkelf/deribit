@@ -19,16 +19,18 @@ def _make_fold_df(n_folds: int = 5, horizon: int = 24) -> pd.DataFrame:
     for fold_id in range(n_folds):
         fold_start = base + pd.Timedelta(days=fold_id * 7)
         regime = ["Bullish", "Neutral", "Bearish", "Strong Bullish", "Strong Bearish"][fold_id % 5]
+        start_price = 100.0 + fold_id
         for h in range(1, horizon + 1):
             ts     = fold_start + pd.Timedelta(hours=h)
-            actual = 100.0 + fold_id + h * 0.1
+            actual = start_price + h * 0.1
             pred   = actual + np.random.default_rng(fold_id + h).standard_normal() * 0.5
             records.append({
-                "fold_id":   fold_id,
-                "horizon_h": h,
-                "actual":    actual,
-                "xgb_pred":  pred,
-                "regime":    regime,
+                "fold_id":     fold_id,
+                "horizon_h":   h,
+                "actual":      actual,
+                "xgb_pred":    pred,
+                "regime":      regime,
+                "start_price": start_price,
             })
     df = pd.DataFrame(records)
     df.index = pd.date_range("2024-01-01", periods=len(df), freq="1h", tz="UTC")
@@ -179,11 +181,12 @@ def test_improvement_ideas_no_history_warning_for_long_window():
         fold_start = pd.Timestamp("2024-01-01", tz="UTC") + pd.Timedelta(days=fold_id * 7)
         for h in range(1, horizon + 1):
             records.append({
-                "fold_id":   fold_id,
-                "horizon_h": h,
-                "actual":    100.0,
-                "xgb_pred":  100.1,
-                "regime":    regime,
+                "fold_id":     fold_id,
+                "horizon_h":   h,
+                "actual":      100.0,
+                "xgb_pred":    100.1,
+                "regime":      regime,
+                "start_price": 100.0,
             })
     fold_df = pd.DataFrame(records)
     # Index must span ≥700 days; freq="7D" × 120 rows = 840 days

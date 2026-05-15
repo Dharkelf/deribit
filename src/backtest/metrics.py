@@ -17,8 +17,31 @@ def mae(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.mean(np.abs(actual[valid] - predicted[valid])))
 
 
-def directional_accuracy(actual: np.ndarray, predicted: np.ndarray) -> float:
-    """Fraction of steps where sign(Δpred) == sign(Δactual)."""
+def directional_accuracy(
+    actual: np.ndarray,
+    predicted: np.ndarray,
+    starts: np.ndarray | None = None,
+) -> float:
+    """Fraction of predictions where sign(Δpred) == sign(Δactual).
+
+    Without *starts*: compares consecutive time-series changes (np.diff).
+      Use this when actual/predicted are adjacent time-steps of one series.
+
+    With *starts*: compares each element's direction from its own start price.
+      Use this for multi-fold backtests where consecutive rows are NOT adjacent
+      in time (e.g. walk-forward folds 7 days apart).
+      sign(predicted[i] − starts[i]) == sign(actual[i] − starts[i])
+    """
+    if starts is not None:
+        if len(actual) == 0:
+            return float("nan")
+        act_dir  = np.sign(actual - starts)
+        pred_dir = np.sign(predicted - starts)
+        valid    = act_dir != 0
+        if valid.sum() == 0:
+            return float("nan")
+        return float((act_dir[valid] == pred_dir[valid]).mean())
+    # Time-series mode: consecutive differences
     if len(actual) < 2 or len(predicted) < 2:
         return float("nan")
     act_dir  = np.sign(np.diff(actual))
