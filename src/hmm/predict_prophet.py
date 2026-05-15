@@ -203,12 +203,11 @@ def _build_future_df(
     future = model.make_future_dataframe(
         np_df, periods=n_steps, n_historic_predictions=True
     )
-    last_known = {
-        feat: np_df[feat].iloc[-1] for feat in feature_subset if feat in np_df.columns
-    }
-    for feat, val in last_known.items():
-        mask = future["ds"] > np_df["ds"].iloc[-1]
-        future.loc[mask, feat] = val
+    future_cols = set(future.columns)
+    mask = future["ds"] > np_df["ds"].iloc[-1]
+    for feat in feature_subset:
+        if feat in np_df.columns and feat in future_cols:
+            future.loc[mask, feat] = np_df[feat].iloc[-1]
     return future
 
 
