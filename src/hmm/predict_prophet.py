@@ -482,7 +482,12 @@ def _run_seed_ensemble(
 
     in_data_ts: pd.DatetimeIndex = extracted[0][0]
     in_data_actual: np.ndarray = extracted[0][2]
-    future_ts: pd.DatetimeIndex = extracted[0][4]
+    # Pick future_ts from the first seed that produced a non-empty today-mask
+    # result; seed-0 may return empty if its today_mask check fails.
+    future_ts: pd.DatetimeIndex = next(
+        (e[4] for e in extracted if len(e[4]) > 0),
+        pd.DatetimeIndex([], tz="UTC"),
+    )
 
     valid_mask = ~(np.isnan(in_data_pred_ens) | np.isnan(in_data_actual))
     in_data_rmse = float(

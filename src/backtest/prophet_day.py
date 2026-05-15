@@ -839,6 +839,24 @@ def run(config: dict) -> None:
         last_state = int(hmm_model.predict(X_causal.values)[-1])
         causal_label_series.loc[ts] = id_to_label.get(last_state, "Neutral")
 
+    # Verify causal coverage: any 23:00 weekday timestamp in feat_df that is
+    # absent from causal_label_series was never causally relabelled (it is
+    # either before X_hmm start or after data cutoff).  These are excluded by
+    # select_candidates (labels.get returns None → not "Bullish") which is
+    # conservative, but log a count so the gap is visible.
+    candidate_ts_in_feat = feat_df.index[
+        (feat_df.index >= _BT_START)
+        & (feat_df.index.hour == 23)
+        & (feat_df.index.dayofweek < 5)
+    ]
+    missing_causal = [ts for ts in candidate_ts_in_feat if ts not in causal_label_series.index]
+    if missing_causal:
+        logger.warning(
+            "%d candidate timestamps in feat_df have no causal label "
+            "(absent from X_hmm) — they will be excluded from selection",
+            len(missing_causal),
+        )
+
     # ── Phase 2: candidates ────────────────────────────────────────────────────
     logger.info("Phase 2: selecting candidates (2024+) …")
     candidates = select_candidates(feat_df, causal_label_series, vol_median)

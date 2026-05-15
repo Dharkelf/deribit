@@ -265,10 +265,10 @@ class LogDiffReturnExtractor(FeatureExtractor):
 
     @property
     def feature_names(self) -> list[str]:
-        return [f"{s}_log_return" for s in _SYMBOLS]
+        return [f"{s}_log_return" for s in _PRICE_SYMBOLS]
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        for sym in _SYMBOLS:
+        for sym in _PRICE_SYMBOLS:
             df[f"{sym}_log_return"] = np.log(
                 df[f"{sym}_close"] / df[f"{sym}_close"].shift(1)
             )
@@ -282,12 +282,12 @@ class RollingVolatilityExtractor(FeatureExtractor):
     def feature_names(self) -> list[str]:
         return [
             f"{s}_vol_{w}h"
-            for s in _SYMBOLS
+            for s in _PRICE_SYMBOLS
             for w in (_SHORT_WINDOW, _LONG_WINDOW)
         ]
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        for sym in _SYMBOLS:
+        for sym in _PRICE_SYMBOLS:
             ret = np.log(df[f"{sym}_close"] / df[f"{sym}_close"].shift(1))
             df[f"{sym}_vol_{_SHORT_WINDOW}h"] = ret.rolling(_SHORT_WINDOW).std()
             df[f"{sym}_vol_{_LONG_WINDOW}h"] = ret.rolling(_LONG_WINDOW).std()
@@ -500,7 +500,7 @@ class MaxPainExtractor(FeatureExtractor):
             else:
                 mp = df[col]
                 df[ratio_out] = mp / btc
-                df[pct_out]   = mp.pct_change(fill_method=None)
+                df[pct_out]   = mp.pct_change()
         return df
 
 
@@ -618,6 +618,13 @@ class FundingRateExtractor(FeatureExtractor):
             .ewm(span=_SHORT_WINDOW, adjust=False, min_periods=_SHORT_WINDOW)
             .mean()
         )
+        n_nan = int(df["funding_rate_ema24h"].isna().sum())
+        if n_nan > 0:
+            logger.debug(
+                "FundingRateExtractor: %d NaN warmup rows (EWM min_periods=%d) "
+                "will be dropped by build_feature_matrix",
+                n_nan, _SHORT_WINDOW,
+            )
         return df
 
 

@@ -213,7 +213,11 @@ def _kstep_forecast(
     else:
         state_var = covars
 
-    pi_j = model.predict_proba(X_df.values)[-1]  # type: ignore[attr-defined]
+    # Use Viterbi (causal) instead of forward-backward posteriors: predict_proba
+    # conditions on all observations in X_df and is non-causal.
+    last_state = int(model.predict(X_df.values)[-1])  # type: ignore[attr-defined]
+    pi_j = np.zeros(n_states)
+    pi_j[last_state] = 1.0
     cum_lrs = np.zeros(k)
     cum_vars = np.zeros(k)
     cum_lr = cum_var = 0.0
