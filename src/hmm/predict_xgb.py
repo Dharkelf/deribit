@@ -316,7 +316,11 @@ def _find_plus_features(
     sol_base = sol_close.reindex(X_base.index)
     X_tr_b, y_tr_b = _build_train_data(X_base, sol_base)
     m_base   = _train_model(X_tr_b, y_tr_b, n_estimators=100)
-    _, _, _, _, quick_base_ar2 = _in_data_predict(m_base, X_base, sol_base)
+    try:
+        _, _, _, _, quick_base_ar2 = _in_data_predict(m_base, X_base, sol_base)
+    except ValueError as exc:
+        logger.info("XGB+: baseline in-data eval failed (%s) — skipping", exc)
+        return []
 
     logger.info(
         "XGB+ searching %d candidate features (quick base adj-R²=%.4f) …",
@@ -403,8 +407,12 @@ def _load_models(config: dict, filename: str) -> tuple | None:
     path = models_dir(config) / filename
     if not path.exists():
         return None
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except Exception as exc:
+        logger.warning("XGB model cache %s unreadable (%s) — will retrain", path.name, exc)
+        return None
 
 
 def _yesterday_end() -> pd.Timestamp:

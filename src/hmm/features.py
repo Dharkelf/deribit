@@ -613,7 +613,9 @@ class FundingRateExtractor(FeatureExtractor):
         if "funding_rate_8h" not in df.columns:
             df["funding_rate_8h"] = np.nan
         df["funding_rate_ema24h"] = (
-            df["funding_rate_8h"].ewm(span=_SHORT_WINDOW, adjust=False).mean()
+            df["funding_rate_8h"]
+            .ewm(span=_SHORT_WINDOW, adjust=False, min_periods=_SHORT_WINDOW)
+            .mean()
         )
         return df
 

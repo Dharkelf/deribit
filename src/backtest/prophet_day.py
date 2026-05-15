@@ -162,6 +162,10 @@ def _build_id_to_label(
     X_df: pd.DataFrame,
 ) -> dict[int, str]:
     """Map HMM integer state → semantic regime label, ordered by SOL_log_return mean."""
+    if "SOL_log_return" not in X_df.columns:
+        raise ValueError(
+            f"SOL_log_return missing from feature matrix columns: {list(X_df.columns)}"
+        )
     sol_idx = list(X_df.columns).index("SOL_log_return")
     means = hmm_model._model.means_[:, sol_idx]
     k = hmm_model.n_components
@@ -325,15 +329,15 @@ def calibrate_fold_time(
         logger.warning("All calibration folds failed; using fallback %.0f s", fallback)
         return fallback
 
-    avg = float(np.percentile(times, 75))
-    n_budget = int(_BUDGET_SEC * _OVERHEAD / avg)
+    p75 = float(np.percentile(times, 75))
+    n_budget = int(_BUDGET_SEC * _OVERHEAD / p75)
     logger.info(
-        "Calibration: %d folds, avg=%.1f s → budget allows ~%d folds",
+        "Calibration: %d folds, p75=%.1f s → budget allows ~%d folds",
         len(times),
-        avg,
+        p75,
         n_budget,
     )
-    return avg
+    return p75
 
 
 # ── Phase 4: fold helpers ─────────────────────────────────────────────────────
@@ -823,8 +827,8 @@ def run(config: dict) -> None:
 
     # ── Phase 3: calibrate + sample ───────────────────────────────────────────
     logger.info("Phase 3: calibrating NP fold time …")
-    avg_fold_sec = calibrate_fold_time(config, feature_subset, df_common, candidates)
-    n_folds = max(3, int(_BUDGET_SEC * _OVERHEAD / avg_fold_sec))
+    fold_time_p75 = calibrate_fold_time(config, feature_subset, df_common, candidates)
+    n_folds = max(3, int(_BUDGET_SEC * _OVERHEAD / fold_time_p75))
     logger.info("Budget: %d folds", n_folds)
 
     # Exclude calibration folds from sampling to avoid repeated training
