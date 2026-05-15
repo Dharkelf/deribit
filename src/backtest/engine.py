@@ -267,12 +267,14 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         xgb_dir_series: pd.Series | None = (
             pd.Series(xgb_direction_at)
             .sort_index()
-            .reindex(label_series.index, method="ffill")
+            .reindex(label_series.index)
+            .ffill()
         )
         pers_series: pd.Series | None = (
             pd.Series(persistence_at)
             .sort_index()
-            .reindex(label_series.index, method="ffill")
+            .reindex(label_series.index)
+            .ffill()
         )
         logger.info(
             "Option C signals built: xgb_direction coverage=%.1f%%  persistence mean=%.3f",

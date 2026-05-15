@@ -519,9 +519,15 @@ def run(config: dict, *, force: bool = False) -> dict:
         _save_models((base_model, q10_model, q90_model), config, _XGB_MODEL_FILENAME)
 
     # ── In-data prediction (real features, no recursion) ─────────────────────
-    in_data_ts, in_data_pred, in_data_actual, in_data_rmse, in_data_adj_r2 = _in_data_predict(
-        base_model, X_df, sol_close, window=_INDATA_HOURS
-    )
+    try:
+        in_data_ts, in_data_pred, in_data_actual, in_data_rmse, in_data_adj_r2 = _in_data_predict(
+            base_model, X_df, sol_close, window=_INDATA_HOURS
+        )
+    except ValueError as exc:
+        logger.warning("In-data eval skipped (%s) — X_df too short", exc)
+        in_data_ts = X_df.index[-_INDATA_HOURS:]
+        in_data_pred = in_data_actual = np.full(_INDATA_HOURS, np.nan)
+        in_data_rmse = in_data_adj_r2 = float("nan")
     logger.info(
         "In-data RMSE (last %d h): $%.2f  adj-R²=%.4f",
         _INDATA_HOURS, in_data_rmse, in_data_adj_r2,
@@ -594,9 +600,15 @@ def run(config: dict, *, force: bool = False) -> dict:
         )
         _plus_mask   = (_fts >= _today_midnight) & (_fts <= _today_end)
         xgb_plus_exp = _exp[_plus_mask] if _plus_mask.any() else _exp[:_DISPLAY_HOURS]
-        xgb_plus_in_ts, xgb_plus_in_pred, _, xgb_plus_rmse, xgb_plus_adj_r2 = _in_data_predict(
-            plus_model, X_plus, sol_plus, window=_INDATA_HOURS
-        )
+        try:
+            xgb_plus_in_ts, xgb_plus_in_pred, _, xgb_plus_rmse, xgb_plus_adj_r2 = _in_data_predict(
+                plus_model, X_plus, sol_plus, window=_INDATA_HOURS
+            )
+        except ValueError as exc:
+            logger.warning("XGB+ in-data eval skipped (%s)", exc)
+            xgb_plus_in_ts = X_plus.index[-_INDATA_HOURS:]
+            xgb_plus_in_pred = np.full(_INDATA_HOURS, np.nan)
+            xgb_plus_rmse = xgb_plus_adj_r2 = float("nan")
         logger.info(
             "XGB+ E[+24h]=$%.2f  in-data RMSE=$%.2f  adj-R²=%.4f  added: %s",
             xgb_plus_exp[-1], xgb_plus_rmse, xgb_plus_adj_r2, plus_features,
