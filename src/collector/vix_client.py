@@ -93,13 +93,14 @@ class VixClient:
             )
             raw["volume"] = 0.0
 
-        # resample to hourly, then filter to hours that exist in the Deribit range
-        # so VIX aligns on the same UTC timestamp grid
+        # resample to hourly and filter to the requested range.
+        # No .dropna() here — if the first VIX daily entry arrives after `start`
+        # (e.g. weekend), early slots have NaN which load_common_dataframe fills
+        # via its own reindex+ffill pass.
         hourly = (
             raw.resample("1h")
             .ffill()
             .loc[start:end]
-            .dropna()
         )
         hourly.index.name = "timestamp"
 

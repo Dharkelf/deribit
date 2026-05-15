@@ -54,9 +54,9 @@ def directional_accuracy(
 
 def sharpe(returns: np.ndarray, periods_per_year: int = 8760) -> float:
     """Annualised Sharpe ratio (rf = 0)."""
-    if len(returns) == 0 or np.std(returns) < 1e-12:
+    if len(returns) == 0 or np.std(returns, ddof=1) < 1e-12:
         return float("nan")
-    return float(np.mean(returns) / np.std(returns) * np.sqrt(periods_per_year))
+    return float(np.mean(returns) / np.std(returns, ddof=1) * np.sqrt(periods_per_year))
 
 
 def max_drawdown(equity_curve: np.ndarray) -> float:

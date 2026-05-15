@@ -41,6 +41,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.collector.repository import _read_parquet
 from src.utils.paths import raw_dir
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
                 f"Missing Parquet for {symbol} at {path}. "
                 "Run 'python main.py collect' first."
             )
-        df = pd.read_parquet(path, engine="pyarrow")
+        df = _read_parquet(path)
         df.columns = [f"{symbol}_{col}" for col in df.columns]
         frames.append(df)
 
@@ -113,7 +114,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
             f"Missing Parquet for VIX at {vix_path}. "
             "Run 'python main.py collect' first."
         )
-    vix_df = pd.read_parquet(vix_path, engine="pyarrow")
+    vix_df = _read_parquet(vix_path)
     vix_df.columns = [f"VIX_{col}" for col in vix_df.columns]
     for col in vix_df.columns:
         combined[col] = vix_df[col].reindex(full_index).ffill()

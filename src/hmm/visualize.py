@@ -527,8 +527,11 @@ def run(config: dict) -> None:
     cutoff = sol_close.index[-1] - pd.Timedelta(days=_LOOKBACK_DAYS)
     mask = sol_close.index >= cutoff
     sol_year = sol_close[mask]
-    idx_start = int(np.searchsorted(X_df.index, sol_year.index[0]))
-    lab_year = labels[idx_start : idx_start + len(sol_year)]
+    # Use a timestamp mask rather than integer arithmetic so lab_year stays
+    # aligned with sol_year even when the cutoff doesn't land on an exact
+    # hourly boundary that exists in X_df.index.
+    lab_mask = (X_df.index >= sol_year.index[0]) & (X_df.index <= sol_year.index[-1])
+    lab_year = labels[lab_mask]
     ts_year = sol_year.index
 
     sol_last = float(sol_close.iloc[-1])

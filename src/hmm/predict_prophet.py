@@ -127,20 +127,17 @@ def _add_regime_proba_to_df(
         return []
     try:
         hmm_model = GaussianHMMModel.load(model_path)
-        proba = hmm_model.predict_proba(X_df.values)  # (n, k)
-        nan_frac = float(np.isnan(proba).mean())
-        if nan_frac > 0:
-            logger.warning(
-                "HMM predict_proba returned %.1f%% NaN — regime proba regressors skipped",
-                nan_frac * 100,
-            )
-            return []
+        # Use Viterbi (causal argmax) rather than forward-backward posteriors.
+        # predict_proba runs the full forward-backward algorithm which conditions
+        # on all observations in X_df — it is non-causal and leaks future
+        # information into each time step's regime assignment.
+        state_ids = hmm_model.predict(X_df.values)  # (n,) int
         col_names: list[str] = []
         for i in range(n_k):
             name = f"hmm_prob_{i}"
-            X_df[name] = proba[:, i]
+            X_df[name] = (state_ids == i).astype(float)
             col_names.append(name)
-        logger.info("Added %d HMM regime probability regressors", n_k)
+        logger.info("Added %d HMM regime indicator regressors (Viterbi)", n_k)
         return col_names
     except Exception as exc:
         logger.warning("HMM regime proba regressors skipped: %s", exc)
@@ -623,9 +620,21 @@ def run(config: dict, xgb_ref: np.ndarray | None = None) -> NpForecastResult:
             if X_plus.index[-1] > cutoff:
                 X_plus = X_plus.loc[X_plus.index <= cutoff]
                 sol_plus = sol_plus.loc[sol_plus.index <= cutoff]
-            # Carry over pre-computed regime proba columns from X_df
+            # Carry over pre-computed regime indicator columns from X_df.
+            # X_plus may start earlier than X_df (longer warmup needed for some
+            # XGB+ features), so reindex can produce NaN for timestamps that
+            # predate X_df.index[0].  Drop those rows to keep NP training clean.
             for col in regime_cols:
                 X_plus[col] = X_df[col].reindex(X_plus.index)
+            if regime_cols:
+                nan_regime_rows = X_plus[regime_cols].isna().any(axis=1)
+                if nan_regime_rows.any():
+                    logger.debug(
+                        "NP+: dropping %d rows with NaN regime cols (warmup gap)",
+                        int(nan_regime_rows.sum()),
+                    )
+                    X_plus = X_plus[~nan_regime_rows]
+                    sol_plus = sol_plus.reindex(X_plus.index)
 
             np_df_plus = _build_np_df(X_plus, sol_plus, plus_subset)
             best_seed: int = ens["best_seed"]

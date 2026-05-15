@@ -255,6 +255,11 @@ def _in_data_predict(
     pred_lrs    = model.predict(X_in)
     ts          = X_df.index[-window:]
     start_price = float(sol_close.iloc[-(window + 1)])
+    if np.isnan(start_price):
+        raise ValueError(
+            f"start_price is NaN at in-data window boundary "
+            f"(sol_close index {-(window + 1)})"
+        )
     pred_prices = start_price * np.exp(np.cumsum(pred_lrs))
     actual      = sol_close.reindex(ts).values
     valid       = ~np.isnan(actual)

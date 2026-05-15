@@ -591,12 +591,13 @@ def _strategy_metrics(df: pd.DataFrame, ret_col: str, label: str) -> dict[str, A
         }
     cum = float(np.exp(r.sum()) - 1.0)
     hit = float((r > 0).mean())
-    # Annualise using actual trades/year derived from cutoff_ts date range.
-    # √252 (daily) is wrong when N trade-days are sampled from 250 eligible weekdays.
+    # Annualise using actual trades/year, capped at 250 (eligible weekdays/year).
+    # Deriving n_per_year directly from len(r)/years inflates Sharpe when folds
+    # are clustered in a short window (e.g. 10 trades over 30 days → n_per_year=122).
     if "cutoff_ts" in df.columns and len(df) > 1:
         ts = pd.to_datetime(df["cutoff_ts"])
         years = max((ts.max() - ts.min()).days / 365.25, 1 / 365)
-        n_per_year = len(r) / years
+        n_per_year = min(len(r) / years, 250.0)
     else:
         n_per_year = 252.0
     sh = float(r.mean() / r.std() * np.sqrt(n_per_year)) if r.std() > 0 else np.nan
