@@ -152,10 +152,15 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     # Fed rate: 0 is factually wrong (current rate ~4-5%).
     # Use NaN when data is missing.
     fed_path = rd / "FED_RATE.parquet"
+    _fed_df: pd.DataFrame | None = None
+    if fed_path.exists():
+        try:
+            _fed_df = pd.read_parquet(fed_path, engine="pyarrow")
+        except Exception as exc:
+            logger.warning("Failed reading FED_RATE.parquet: %s — filling with NaN", exc)
     for col in ("fed_rate", "fed_rate_last_change"):
-        if fed_path.exists() and col in pd.read_parquet(fed_path, engine="pyarrow").columns:
-            s = pd.read_parquet(fed_path, engine="pyarrow")[col]
-            s = s.reindex(full_index).ffill()
+        if _fed_df is not None and col in _fed_df.columns:
+            s = _fed_df[col].reindex(full_index).ffill()
         else:
             logger.warning("FED_RATE.parquet missing col %s — filling NaN", col)
             s = pd.Series(np.nan, index=full_index, name=col)
@@ -164,11 +169,16 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     # Max Pain: 0 is meaningless (would imply price = 100% above pain level).
     # Use NaN so build_feature_matrix drops affected rows rather than
     # propagating a nonsensical −1.0 percentage signal.
+    _mp_path = rd / "BTC_OPTIONS_MAX_PAIN.parquet"
+    _mp_df: pd.DataFrame | None = None
+    if _mp_path.exists():
+        try:
+            _mp_df = pd.read_parquet(_mp_path, engine="pyarrow")
+        except Exception as exc:
+            logger.warning("Failed reading BTC_OPTIONS_MAX_PAIN.parquet: %s — filling with NaN", exc)
     for col in ("BTC_options_max_pain", "BTC_options_max_pain_7d"):
-        path = rd / "BTC_OPTIONS_MAX_PAIN.parquet"
-        if path.exists() and col in pd.read_parquet(path, engine="pyarrow").columns:
-            s = pd.read_parquet(path, engine="pyarrow")[col]
-            s = s.reindex(full_index).ffill()  # NaN where no history yet
+        if _mp_df is not None and col in _mp_df.columns:
+            s = _mp_df[col].reindex(full_index).ffill()  # NaN where no history yet
         else:
             logger.warning("BTC_OPTIONS_MAX_PAIN.parquet missing col %s — filling NaN", col)
             s = pd.Series(np.nan, index=full_index, name=col)

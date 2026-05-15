@@ -326,6 +326,8 @@ def _extract_forecast(
         periods=n_steps,
         freq="1h",
     )
+    if all_step_ts.tz is not None:
+        all_step_ts = all_step_ts.tz_localize(None)
 
     _tm = (
         today_midnight

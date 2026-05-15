@@ -567,7 +567,15 @@ def _strategy_metrics(df: pd.DataFrame, ret_col: str, label: str) -> dict[str, A
         }
     cum = float(np.exp(r.sum()) - 1.0)
     hit = float((r > 0).mean())
-    sh = float(r.mean() / r.std()) * np.sqrt(252) if r.std() > 0 else np.nan
+    # Annualise using actual trades/year derived from cutoff_ts date range.
+    # √252 (daily) is wrong when N trade-days are sampled from 250 eligible weekdays.
+    if "cutoff_ts" in df.columns and len(df) > 1:
+        ts = pd.to_datetime(df["cutoff_ts"])
+        years = max((ts.max() - ts.min()).days / 365.25, 1 / 365)
+        n_per_year = len(r) / years
+    else:
+        n_per_year = 252.0
+    sh = float(r.mean() / r.std() * np.sqrt(n_per_year)) if r.std() > 0 else np.nan
     return {
         "strategy": label,
         "n": int(len(r)),

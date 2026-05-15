@@ -155,8 +155,14 @@ class GaussianHMMModel(HMMStrategy):
 
     @classmethod
     def load(cls, path: Path) -> "GaussianHMMModel":
-        with open(path, "rb") as f:
-            model: GaussianHMMModel = pickle.load(f)
+        try:
+            with open(path, "rb") as f:
+                model: GaussianHMMModel = pickle.load(f)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load HMM model from {path} ({exc}). "
+                "Delete the file and re-run 'python main.py hmm' to retrain."
+            ) from exc
         logger.info("Model loaded ← %s", path)
         return model
 
