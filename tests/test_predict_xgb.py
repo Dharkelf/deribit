@@ -8,7 +8,9 @@ import pandas as pd
 import pytest
 
 from src.hmm.predict_xgb import (
+    _base_dominates,
     _build_train_data,
+    _find_plus_features,
     _in_data_predict,
     _init_state,
     _recursive_forecast,
@@ -211,3 +213,52 @@ def test_recursive_forecast_timestamps_after_last_known() -> None:
     q90  = _train_model(X, y, quantile=0.90, n_estimators=20)
     future_ts, _, _, _ = _recursive_forecast(base, q10, q90, X_df, sol_close, n_steps=5)
     assert future_ts[0] == X_df.index[-1] + pd.Timedelta(hours=1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _base_dominates
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_base_dominates_all_columns_in_base() -> None:
+    """When every column is a base feature, there are no plus features → True."""
+    X_df, sol_close = _make_X_df(300)
+    X, y = _build_train_data(X_df, sol_close)
+    model = _train_model(X, y, n_estimators=10)
+    col_names = list(X_df.columns)
+    assert _base_dominates(model, col_names, col_names) is True
+
+
+def test_base_dominates_returns_bool() -> None:
+    X_df, sol_close = _make_X_df(300)
+    X, y = _build_train_data(X_df, sol_close)
+    model = _train_model(X, y, n_estimators=10)
+    col_names = list(X_df.columns)
+    result = _base_dominates(model, col_names, col_names[:2])
+    assert isinstance(result, bool)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _find_plus_features — early-exit paths (no real Parquet needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_find_plus_features_no_candidates_returns_empty() -> None:
+    """viable_all ⊆ base_subset → no candidates → early [] without touching df_common."""
+    result = _find_plus_features(
+        pd.DataFrame(),          # not accessed when candidate list is empty
+        pd.Series(dtype=float),  # not accessed
+        base_subset=["SOL_log_return", "feat_a", "feat_b"],
+        viable_all=["SOL_log_return", "feat_a", "feat_b"],
+    )
+    assert result == []
+
+
+def test_find_plus_features_empty_viable_returns_empty() -> None:
+    result = _find_plus_features(
+        pd.DataFrame(),
+        pd.Series(dtype=float),
+        base_subset=["SOL_log_return"],
+        viable_all=[],
+    )
+    assert result == []

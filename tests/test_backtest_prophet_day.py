@@ -5,12 +5,14 @@ import pandas as pd
 import pytest
 
 from src.backtest.prophet_day import (
+    _build_id_to_label,
     apply_stop_loss,
     build_day_returns,
     find_sell_hour_by_ci,
     sample_days,
     select_candidates,
 )
+from src.hmm.model import GaussianHMMModel
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -262,3 +264,42 @@ def test_select_candidates_regime_filter():
     result = select_candidates(feat_df, labels, vol_median=0.01)
     assert len(result) == 1
     assert result[0] == base
+
+
+# ── _build_id_to_label ────────────────────────────────────────────────────────
+
+
+def _make_fitted_hmm(n_components: int = 2) -> tuple[GaussianHMMModel, pd.DataFrame]:
+    rng = np.random.default_rng(7)
+    n_rows = max(500, n_components * 100)
+    X = np.column_stack([
+        rng.normal(0, 0.01, n_rows),
+        rng.normal(0, 1.0,  n_rows),
+        rng.normal(0, 0.5,  n_rows),
+    ])
+    model = GaussianHMMModel(
+        n_components=n_components, covariance_type="diag", n_iter=30
+    ).fit(X)
+    X_df = pd.DataFrame(X, columns=["SOL_log_return", "feat_b", "feat_c"])
+    return model, X_df
+
+
+def test_build_id_to_label_raises_for_missing_sol_column() -> None:
+    model, _ = _make_fitted_hmm()
+    X_df_bad = pd.DataFrame({"feat_a": [1.0], "feat_b": [2.0]})
+    with pytest.raises(ValueError, match="SOL_log_return"):
+        _build_id_to_label(model, X_df_bad)
+
+
+def test_build_id_to_label_keys_cover_all_states() -> None:
+    for k in (2, 3, 5):
+        model, X_df = _make_fitted_hmm(n_components=k)
+        mapping = _build_id_to_label(model, X_df)
+        assert set(mapping.keys()) == set(range(k))
+        assert all(isinstance(v, str) for v in mapping.values())
+
+
+def test_build_id_to_label_values_are_unique() -> None:
+    model, X_df = _make_fitted_hmm(n_components=5)
+    mapping = _build_id_to_label(model, X_df)
+    assert len(set(mapping.values())) == 5

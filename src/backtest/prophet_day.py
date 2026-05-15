@@ -312,10 +312,28 @@ def calibrate_fold_time(
     df_common: pd.DataFrame,
     candidates: list[pd.Timestamp],
     n_cal: int = _N_CAL,
-) -> float:
-    """Time n_cal NP folds on the first candidates; return avg seconds/fold."""
+) -> tuple[float, set]:
+    """Time n_cal NP folds spread across the candidate range.
+
+    Returns (p75_seconds, cal_ts_set).  Using evenly-spread candidates instead
+    of the first n_cal gives a more representative estimate: early candidates
+    have shorter training windows and are systematically faster than later ones.
+
+    The caller should exclude cal_ts_set from the sampling pool to avoid
+    training NeuralProphet twice on the same fold.
+    """
+    if not candidates:
+        return 90.0, set()
+
+    if n_cal <= 1 or len(candidates) <= n_cal:
+        cal_candidates = candidates[:] if n_cal > 1 else [candidates[-1]]
+    else:
+        # Spread indices: start, evenly spaced ..., end
+        indices = [round(i * (len(candidates) - 1) / (n_cal - 1)) for i in range(n_cal)]
+        cal_candidates = [candidates[i] for i in indices]
+
     times: list[float] = []
-    for cutoff_ts in candidates[:n_cal]:
+    for cutoff_ts in cal_candidates:
         t0 = time.perf_counter()
         try:
             predict_backtest_fold(config, cutoff_ts, feature_subset, df_common)
@@ -324,20 +342,22 @@ def calibrate_fold_time(
             continue
         times.append(time.perf_counter() - t0)
 
+    cal_ts_set: set = set(cal_candidates)
+
     if not times:
         fallback = 90.0
         logger.warning("All calibration folds failed; using fallback %.0f s", fallback)
-        return fallback
+        return fallback, cal_ts_set
 
     p75 = float(np.percentile(times, 75))
     n_budget = int(_BUDGET_SEC * _OVERHEAD / p75)
     logger.info(
-        "Calibration: %d folds, p75=%.1f s → budget allows ~%d folds",
+        "Calibration: %d folds (spread), p75=%.1f s → budget allows ~%d folds",
         len(times),
         p75,
         n_budget,
     )
-    return p75
+    return p75, cal_ts_set
 
 
 # ── Phase 4: fold helpers ─────────────────────────────────────────────────────
@@ -827,12 +847,13 @@ def run(config: dict) -> None:
 
     # ── Phase 3: calibrate + sample ───────────────────────────────────────────
     logger.info("Phase 3: calibrating NP fold time …")
-    fold_time_p75 = calibrate_fold_time(config, feature_subset, df_common, candidates)
+    fold_time_p75, cal_ts_set = calibrate_fold_time(config, feature_subset, df_common, candidates)
     n_folds = max(3, int(_BUDGET_SEC * _OVERHEAD / fold_time_p75))
     logger.info("Budget: %d folds", n_folds)
 
-    # Exclude calibration folds from sampling to avoid repeated training
-    sampled = sample_days(candidates[_N_CAL:], causal_label_series, feat_df, n_folds)
+    # Exclude calibration timestamps from sampling to avoid repeated NP training
+    pool = [c for c in candidates if c not in cal_ts_set]
+    sampled = sample_days(pool, causal_label_series, feat_df, n_folds)
     if not sampled:
         logger.error("No days sampled — not enough candidates after calibration skip")
         return
