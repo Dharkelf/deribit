@@ -64,6 +64,11 @@ def _make_df_common(n_rows: int = 600) -> pd.DataFrame:
     data["stock_fear_greed"] = rng.uniform(0.2, 0.8, n_rows)
     data["fed_rate"] = 4.33
     data["fed_rate_last_change"] = -0.25
+    # These columns are required so coverage-filter tests don't silently exclude
+    # FundingRateExtractor, OIRatioExtractor, and IVSkewExtractor features.
+    data["funding_rate_8h"] = rng.uniform(-0.001, 0.001, n_rows)
+    data["SOL_OI_BTC_ratio"] = rng.uniform(0.01, 0.05, n_rows)
+    data["btc_iv_skew"] = rng.uniform(-5.0, 5.0, n_rows)
     return pd.DataFrame(data, index=idx)
 
 

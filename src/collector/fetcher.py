@@ -67,9 +67,14 @@ def _fetch_deribit(
                 "Fetching %s (%s) from %s to %s",
                 symbol, instrument, start.date(), end.date(),
             )
-            df = client.fetch_ohlcv(instrument, start, end)
-            repo.append(symbol, df)
-            repo.save_sample(symbol)
+            try:
+                df = client.fetch_ohlcv(instrument, start, end)
+                repo.append(symbol, df)
+                repo.save_sample(symbol)
+            except Exception as exc:
+                logger.warning(
+                    "Deribit OHLCV fetch failed for %s (%s) — skipping", symbol, exc
+                )
 
 
 def _fetch_vix(

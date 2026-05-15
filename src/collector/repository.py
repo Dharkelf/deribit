@@ -24,7 +24,12 @@ def _read_parquet(path: Path) -> pd.DataFrame:
         return pd.read_parquet(path, engine="pyarrow")
     except OSError:
         logger.debug("pyarrow read failed for %s — retrying with fastparquet", path.name)
-        return pd.read_parquet(path, engine="fastparquet")
+        try:
+            return pd.read_parquet(path, engine="fastparquet")
+        except Exception as exc:
+            raise OSError(
+                f"Both pyarrow and fastparquet failed to read {path}: {exc}"
+            ) from exc
 
 
 def _write_parquet(df: pd.DataFrame, path: Path) -> None:

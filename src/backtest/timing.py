@@ -163,9 +163,10 @@ def _weekend_hold_stats(strategy_df: pd.DataFrame) -> dict:
     wd_lr = df.loc[~is_weekend, "strategy_lr"].values
 
     def _sharpe(lr: np.ndarray) -> float:
-        if len(lr) < 2 or lr.std() == 0:
+        s = float(np.std(lr, ddof=1))
+        if len(lr) < 2 or s == 0:
             return float("nan")
-        return float(lr.mean() / lr.std() * np.sqrt(8760))
+        return float(lr.mean() / s * np.sqrt(8760))
 
     return {
         "weekend_lr": wk_lr,

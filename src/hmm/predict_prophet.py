@@ -323,9 +323,8 @@ def _extract_forecast(
         periods=n_steps,
         freq="1h",
     )
-    if all_step_ts.tz is not None:
-        all_step_ts = all_step_ts.tz_localize(None)
-
+    # all_step_ts is always tz-naive: built from last_known_ds which comes from
+    # np_df["ds"] which is tz-localized to None in _build_np_df.
     _tm = (
         today_midnight
         if today_midnight is not None

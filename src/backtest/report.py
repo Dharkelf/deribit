@@ -76,9 +76,11 @@ def _yearly_strategy_stats(strategy_df: pd.DataFrame) -> pd.DataFrame:
         active_h = int((pos != 0).sum())
         total_h = len(grp)
 
-        # Count trade entries: position transitions from zero/different to nonzero
+        # Count trade entries: position transitions from zero/different to nonzero.
+        # fill_value=0 prevents the first row of each year being counted as a new
+        # trade when the prior year ended in a flat position.
         pos_s = pd.Series(pos)
-        entries = int(((pos_s != 0) & (pos_s != pos_s.shift(1))).sum())
+        entries = int(((pos_s != 0) & (pos_s != pos_s.shift(1, fill_value=0))).sum())
 
         dominant = grp["regime"].mode().iloc[0] if len(grp) > 0 else "—"
 

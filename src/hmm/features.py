@@ -500,7 +500,11 @@ class MaxPainExtractor(FeatureExtractor):
             else:
                 mp = df[col]
                 df[ratio_out] = mp / btc
-                df[pct_out]   = mp.pct_change()
+                # pct_change on hourly-ffilled data produces zeros for 23/24 h.
+                # Restrict to actual daily update points (where value changes),
+                # then forward-fill so every hour carries the most recent day's change.
+                changed = mp != mp.shift(1)
+                df[pct_out] = mp.pct_change().where(changed).ffill()
         return df
 
 
