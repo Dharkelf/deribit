@@ -141,7 +141,7 @@ def _assign_regime_colors_and_labels(
             _STRONG_BULLISH_COLOR,
         ]
     else:
-        mid_colors = _EXTRA_COLORS[: k - 2]
+        mid_colors = [_EXTRA_COLORS[i % len(_EXTRA_COLORS)] for i in range(k - 2)]
         base_colors = [_STRONG_BEARISH_COLOR] + mid_colors + [_STRONG_BULLISH_COLOR]
         base_labels = {1: "Strong Bearish", k: "Strong Bullish"}
         for rank in range(2, k):

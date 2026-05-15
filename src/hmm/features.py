@@ -127,7 +127,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
-            s = pd.read_parquet(path, engine="pyarrow")[col]
+            s = _read_parquet(path)[col]
             s = s.reindex(full_index).ffill().fillna(0.0)
         else:
             logger.warning("%s.parquet not found — filling %s with 0", symbol, col)
@@ -143,7 +143,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     ]:
         path = rd / f"{symbol}.parquet"
         if path.exists():
-            s = pd.read_parquet(path, engine="pyarrow")[col]
+            s = _read_parquet(path)[col]
             s = s.reindex(full_index).ffill()
         else:
             logger.warning("%s.parquet not found — filling %s with NaN", symbol, col)
@@ -156,7 +156,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     _fed_df: pd.DataFrame | None = None
     if fed_path.exists():
         try:
-            _fed_df = pd.read_parquet(fed_path, engine="pyarrow")
+            _fed_df = _read_parquet(fed_path)
         except Exception as exc:
             logger.warning("Failed reading FED_RATE.parquet: %s — filling with NaN", exc)
     for col in ("fed_rate", "fed_rate_last_change"):
@@ -174,7 +174,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
     _mp_df: pd.DataFrame | None = None
     if _mp_path.exists():
         try:
-            _mp_df = pd.read_parquet(_mp_path, engine="pyarrow")
+            _mp_df = _read_parquet(_mp_path)
         except Exception as exc:
             logger.warning("Failed reading BTC_OPTIONS_MAX_PAIN.parquet: %s — filling with NaN", exc)
     for col in ("BTC_options_max_pain", "BTC_options_max_pain_7d"):
@@ -193,7 +193,7 @@ def load_common_dataframe(config: dict, force_reload: bool = False) -> pd.DataFr
             logger.warning("%s not found — filling %s with NaN", path.name, col)
             return pd.Series(np.nan, index=full_index, name=col)
         try:
-            df_tmp = pd.read_parquet(path, engine="pyarrow")
+            df_tmp = _read_parquet(path)
             if col not in df_tmp.columns:
                 logger.warning(
                     "%s missing column '%s' (got: %s) — filling with NaN",

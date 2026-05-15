@@ -246,6 +246,10 @@ def run(config: dict) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
                 fold_rmse,
             )
 
+    if not fold_records:
+        logger.warning("No fold records generated — returning empty DataFrame")
+        return pd.DataFrame()
+
     fold_df = pd.DataFrame(fold_records)
     fold_df["timestamp"] = pd.DatetimeIndex(fold_df["timestamp"]).tz_convert("UTC")
     fold_df = fold_df.set_index("timestamp")
