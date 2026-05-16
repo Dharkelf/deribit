@@ -504,7 +504,7 @@ class MaxPainExtractor(FeatureExtractor):
                 # Restrict to actual daily update points (where value changes),
                 # then forward-fill so every hour carries the most recent day's change.
                 changed = mp != mp.shift(1)
-                df[pct_out] = mp.pct_change().where(changed).ffill()
+                df[pct_out] = mp.pct_change(fill_method=None).where(changed).ffill()
         return df
 
 

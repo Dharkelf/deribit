@@ -164,7 +164,7 @@ def _weekend_hold_stats(strategy_df: pd.DataFrame) -> dict:
 
     def _sharpe(lr: np.ndarray) -> float:
         s = float(np.std(lr, ddof=1))
-        if len(lr) < 2 or s == 0:
+        if len(lr) < 2 or s == 0 or np.isnan(s):
             return float("nan")
         return float(lr.mean() / s * np.sqrt(8760))
 
