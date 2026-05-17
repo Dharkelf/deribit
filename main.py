@@ -76,7 +76,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["collect", "hmm", "backtest", "timing", "prophet_day"],
+        choices=["collect", "hmm", "backtest", "timing", "prophet_day", "intraday", "intraday_np"],
         default=None,
         help="Module to run (omit to run both collect + hmm sequentially)",
     )
@@ -119,6 +119,16 @@ def main() -> None:
         from src.backtest.prophet_day import run as run_prophet_day
 
         run_prophet_day(config)
+
+    if args.command == "intraday":
+        from src.backtest.intraday import run as run_intraday
+
+        run_intraday(config)
+
+    if args.command == "intraday_np":
+        from src.backtest.intraday_np import run as run_intraday_np
+
+        run_intraday_np(config)
 
 
 if __name__ == "__main__":

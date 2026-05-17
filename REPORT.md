@@ -440,6 +440,47 @@ may have introduced a multi-column regressor that NeuralProphet's
 
 ---
 
+## Intraday NP Backtest — Strategy Iteration Log (2026-05-17)
+
+### Command
+`python main.py intraday_np` → `INTRADAY_NP_REPORT.md` + `intraday_np_backtest.parquet`
+
+### Strategy Evolution
+
+| Run | Entry | Exits | Signal | TC | Result |
+|---|---|---|---|---|---|
+| v1 | 00:00 UTC | {4,6,8}:00 | mean(16–20h) > ±5% | 2% RT | 0 trades (filter too strict) |
+| v2 | 00:00 UTC | {4,5,6}:00 | mean(16–20h) > ±5%, entry dev ≤4% | 2% RT | 3 trades/18 folds, all net negative |
+| v3 (EU) | 07:00 UTC | {11,12,13}:00 | mean(exits) > ±5%, entry dev ≤4% | 2% RT | 3 trades/18 folds, all net negative; largest actual move ~1.3% |
+| **v4 (current)** | 07:00 UTC | {11,12,13}:00 | Gate 1: yhat24 direction; Gate 2: ≥2/3 exits agree; Gate 3: entry dev ≤4% | 2% RT | not yet run |
+
+### v3 Observed Trades (partial run, 18/52 folds)
+
+| Date | Dir | Exit | Eve | Signal | Exp | Actual | Net |
+|---|---|---|---|---|---|---|---|
+| 2026-03-21 | SHORT | 12:00 | +0.48% | −9.1% | −8.3% | −0.0% | −2.0% |
+| 2026-02-19 | LONG | 11:00 | +1.30% | +11.3% | +10.3% | −1.3% | −3.3% |
+| 2026-01-30 | LONG | 12:00 | −1.37% | +5.3% | +4.5% | +0.1% | −1.9% |
+
+Pattern: NP signals strong (>5%), but actual EU-session moves are small (<1.5%).
+2% round-trip TC consumes all alpha → switching to consistency-of-direction gates.
+
+### v4 Gate Logic (current implementation)
+
+```
+Gate 1 — daily direction : yhat24 > entry_price → LONG; else SHORT
+Gate 2 — duration        : count(exit yhats consistent with Gate 1 direction) ≥ 2
+Gate 3 — calibration     : |yhat8 − actual_07h| / actual_07h ≤ 4%
+Exit   — nearest-to-mean : among direction-consistent exit yhats, pick closest to their mean
+Extra  — eve indicator   : SOL return 21:00 (prev day) → 07:00 entry, logged (not gated)
+         exit_agreement  : count of agreeing exit yhats (0–3), logged per trade
+```
+
+Rationale: replaces a magnitude threshold (brittle, depends on NP absolute calibration) with
+a consistency-of-direction check across two independent forecast horizons (EU window + full day).
+
+---
+
 ## Known Issues
 
 - **VIX weekend gap** — yfinance fails on Saturdays/Sundays with `YFTzMissingError`. VIX is

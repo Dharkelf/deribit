@@ -70,6 +70,9 @@ Two-module Python pipeline:
                         │  strategy.py        │  Position sizing + gates + timing
                         │  timing.py          │  UTC hour×weekday edge analysis
                         │  report.py          │  PNG + BACKTEST_REPORT.md
+                        │  prophet_day.py     │  NP day-selection (BTC momentum gate)
+                        │  intraday.py        │  Intraday SOL (XGB-based)
+                        │  intraday_np.py     │  Intraday SOL (NP EU session)
                         └────────────────────┘
 ```
 
@@ -103,7 +106,11 @@ src/
 │   ├── strategy.py            ← RegimeStrategy: position map, discrete mode, composite gate
 │   ├── metrics.py             ← rmse, mae, sharpe, max_drawdown, annualized_return
 │   ├── report.py              ← BACKTEST_REPORT.md + 4-panel PNG
-│   └── timing.py              ← UTC hour×weekday heatmap, block analysis, TIMING_REPORT.md
+│   ├── timing.py              ← UTC hour×weekday heatmap, block analysis, TIMING_REPORT.md
+│   ├── prophet_day.py         ← NP day-selection backtest (long/short, walk-forward, BTC momentum gate)
+│   ├── intraday.py            ← Intraday SOL backtest (XGB-based, hour-level entries)
+│   └── intraday_np.py         ← Intraday SOL backtest (NP EU session: 07:00 entry, 11-13h exits,
+│                                 daily-direction + duration-consistency gates, walk-forward)
 │
 └── utils/
     └── paths.py               ← raw_dir, models_dir, processed_dir from settings.yaml
@@ -253,6 +260,18 @@ python main.py backtest
 
 # Timing analysis (UTC hour × weekday edge heatmap + TIMING_REPORT.md)
 python main.py timing
+
+# NP day-selection backtest (prophet_day walk-forward, BTC momentum gate)
+python main.py prophet_day
+
+# Intraday SOL backtest (XGB-based, hour-level entries)
+python main.py intraday
+
+# Intraday SOL backtest — NP EU session strategy
+# Entry 07:00 UTC, exits {11,12,13}:00; gates: daily direction (yhat24) +
+# duration consistency (≥2/3 exit yhats agree) + entry calibration (yhat8 ≤4%)
+# 52 randomly sampled days, walk-forward, outputs INTRADAY_NP_REPORT.md
+python main.py intraday_np
 
 # Visual inspection — 12 panels of raw collected data
 python -m src.collector.inspect
